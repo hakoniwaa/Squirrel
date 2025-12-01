@@ -113,7 +113,7 @@ Storage) Daemon) Router) Retrieval)
   fn init_global_db() -> Result<Connection>  // ~/.sqrl/squirrel.db
   ```
 
-- [ ] Create tables (see ARCHITECTURE.md for full schema):
+- [ ] Create tables:
   ```sql
   CREATE TABLE memories (
     id TEXT PRIMARY KEY,
@@ -127,43 +127,48 @@ Storage) Daemon) Router) Retrieval)
     updated_at TEXT NOT NULL
   );
 
-  CREATE TABLE events (id, cli, repo, event_type, content, file_paths, timestamp, processed);
-  CREATE TABLE episodes (id, repo, cli, start_ts, end_ts, event_ids, processed);
+  CREATE TABLE events (
+    id TEXT PRIMARY KEY,
+    repo TEXT NOT NULL,
+    kind TEXT NOT NULL,        -- user | assistant | tool | system
+    content TEXT NOT NULL,
+    file_paths TEXT,           -- JSON array
+    ts TEXT NOT NULL,
+    processed INTEGER DEFAULT 0
+  );
+  -- Note: No episodes table - episodes are in-memory batching only
   ```
 
-- [ ] CRUD operations for events, episodes, memories
+- [ ] CRUD operations for events and memories
 
 ### A2. Event model (`events.rs`)
 
-- [ ] Define `Event` struct:
+- [ ] Define `Event` struct (normalized, CLI-agnostic):
   ```rust
   struct Event {
       id: String,
-      cli: String,        // claude_code | codex | cursor | gemini
       repo: String,
-      event_type: String, // user_message | assistant_response | tool_use | tool_result
+      kind: EventKind,     // User | Assistant | Tool | System
       content: String,
       file_paths: Vec<String>,
-      timestamp: DateTime<Utc>,
+      ts: DateTime<Utc>,
       processed: bool,
   }
   ```
 
-- [ ] Define `Episode` struct:
+- [ ] Define `Episode` struct (in-memory only, not persisted):
   ```rust
   struct Episode {
       id: String,
       repo: String,
-      cli: String,
       start_ts: DateTime<Utc>,
       end_ts: DateTime<Utc>,
-      event_ids: Vec<String>,
-      processed: bool,
+      events: Vec<Event>,  // Contains actual events, not IDs
   }
   ```
 
 - [ ] Dedup hash computation
-- [ ] Episode grouping (same repo + CLI + time gap < 20min)
+- [ ] Episode batching: 4-hour time window OR 50 events max (whichever first)
 
 ### A3. Config (`config.rs`)
 
@@ -229,38 +234,48 @@ Storage) Daemon) Router) Retrieval)
 
 - [ ] Multi-CLI log discovery:
   ```rust
-  fn find_log_paths(project: &Path) -> Vec<(CLI, PathBuf)> {
-      // ~/.claude/projects/<encoded>/    → Claude Code
-      // ~/.codex-cli/logs/               → Codex CLI
-      // ~/.gemini/logs/                  → Gemini CLI
-      // ~/.cursor-tutor/logs/            → Cursor
+  fn find_log_paths() -> Vec<PathBuf> {
+      // ~/.claude/projects/**/*.jsonl    → Claude Code
+      // ~/.codex-cli/logs/**/*.jsonl     → Codex CLI
+      // ~/.gemini/logs/**/*.jsonl        → Gemini CLI
+      // Note: All CLIs normalized to same Event schema
   }
   ```
 
 - [ ] JSONL tailer using `notify` crate:
   ```rust
   struct LogWatcher {
-      cli: CLI,
-      log_dir: PathBuf,
+      log_dirs: Vec<PathBuf>,
       file_positions: HashMap<PathBuf, u64>,
   }
   ```
 
-- [ ] Line parsers for each CLI format
+- [ ] Line parsers for each CLI format → normalized Event
 - [ ] Write events to SQLite
 
 ### B3. Episode Batching
 
-- [ ] Background task:
+- [ ] Per-repo event buffer:
   ```rust
-  async fn batch_events_loop(interval: Duration) {
-      // Every 30 seconds or 20 events:
-      // 1. Query unprocessed events
-      // 2. Group into episodes (same repo + CLI + time gap < 20min)
-      // 3. Send to Python via IPC
-      // 4. Mark as processed
+  struct EventBuffer {
+      repo: String,
+      events: Vec<Event>,
+      oldest_ts: DateTime<Utc>,
   }
   ```
+
+- [ ] Flush triggers:
+  ```rust
+  fn should_flush(buffer: &EventBuffer) -> bool {
+      const MAX_EVENTS: usize = 50;
+      const WINDOW_HOURS: i64 = 4;
+
+      buffer.events.len() >= MAX_EVENTS ||
+      buffer.age() >= Duration::hours(WINDOW_HOURS)
+  }
+  ```
+
+- [ ] On flush: create Episode, send to Python via IPC, mark events processed
 
 ### B4. IPC Client (`ipc.rs`)
 
