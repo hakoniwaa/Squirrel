@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "cache": {
+      "command": "/Users/galenoakes/.local/bin/cache-mcp",
+      "type": "stdio",
+      "args": [],
+      "env": {}
+    }
+  }
+}

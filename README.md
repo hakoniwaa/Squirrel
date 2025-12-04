@@ -1,17 +1,22 @@
 # Squirrel
 
-Local-first memory system for AI coding tools. Learns your coding patterns and provides personalized, task-aware context via MCP.
+Local-first memory system for AI coding tools. Learns from your successes AND failures, providing personalized, task-aware context via MCP.
 
 ## What It Does
 
 ```
 You code with Claude Code / Codex / Cursor / Gemini CLI
                     ↓
-    Squirrel watches logs and learns (passive)
+    Squirrel watches logs (100% passive, invisible)
+                    ↓
+    LLM analyzes: What succeeded? What failed?
+                    ↓
+    SUCCESS → recipe/project_fact memories
+    FAILURE → pitfall memories (what NOT to do)
                     ↓
     AI tools call MCP → get personalized context
                     ↓
-          Better code suggestions
+          Better code suggestions + avoid past mistakes
 ```
 
 ## Architecture
@@ -33,8 +38,10 @@ You code with Claude Code / Codex / Cursor / Gemini CLI
 │  │              Router Agent (Dual Mode)                      │ │
 │  │  ┌─────────────────────┐  ┌─────────────────────────────┐ │ │
 │  │  │   INGEST Mode       │  │      ROUTE Mode             │ │ │
-│  │  │ events → memories   │  │ task → relevant memories    │ │ │
-│  │  │ ADD/UPDATE/NOOP     │  │ + "why" explanations        │ │ │
+│  │  │ Episode → LLM:      │  │ task → relevant memories    │ │ │
+│  │  │  1. Segment tasks   │  │ + "why" explanations        │ │ │
+│  │  │  2. SUCCESS/FAILURE │  │                             │ │ │
+│  │  │  3. Extract memories│  │                             │ │ │
 │  │  └─────────────────────┘  └─────────────────────────────┘ │ │
 │  └───────────────────────────────────────────────────────────┘ │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
@@ -67,7 +74,7 @@ cd ~/my-project && sqrl init
 
 ## How It Works
 
-### Input: Passive Log Watching
+### Input: Passive Log Watching + Success Detection
 
 ```
 ~/.claude/projects/**/*.jsonl  ──┐
@@ -75,8 +82,16 @@ cd ~/my-project && sqrl init
 ~/.gemini/logs/**/*.jsonl      ──┤                        ↓
 ~/.cursor-tutor/logs/**/*.jsonl──┘               Python INGEST mode
                                                          ↓
-                                              ADD/UPDATE/NOOP memories
+                                              LLM analyzes Episode:
+                                              1. Segment Tasks
+                                              2. Classify: SUCCESS | FAILURE | UNCERTAIN
+                                              3. Extract memories by outcome
 ```
+
+**Why success detection matters:** Without it, we'd blindly store all patterns - including the 4 failed approaches before the 1 that worked. With success detection:
+- SUCCESS → recipe/project_fact (reusable patterns)
+- FAILURE → pitfall (what NOT to do next time)
+- UNCERTAIN → skip (not enough info)
 
 ### Output: MCP Tools
 
@@ -98,6 +113,25 @@ AI calls squirrel_get_task_context("Add delete endpoint")
 | `project_fact` | Project knowledge | "Uses PostgreSQL 15" |
 | `pitfall` | Known issues | "API returns 500 on null user_id" |
 | `recipe` | Common patterns | "Use repository pattern for DB" |
+
+## Memory Fields
+
+| Field | Description |
+|-------|-------------|
+| `importance` | critical / high / medium / low - used in retrieval scoring |
+| `repo` | repo path OR 'global' for user-level memories |
+| `state` | active / deleted - soft-delete for recovery |
+| `user_id` | 'local' for v1, prepared for future cloud/team features |
+| `assistant_id` | 'squirrel' for v1, prepared for multi-agent scenarios |
+
+## Data Integrity
+
+| Feature | Purpose |
+|---------|---------|
+| History tracking | Logs old/new content on every ADD/UPDATE/DELETE for audit trail |
+| Access logging | Logs every memory retrieval with query and score for debugging |
+| UUID→integer mapping | Prevents LLM hallucinating memory IDs during dedup |
+| Soft-delete | state='deleted' instead of hard delete for recovery |
 
 ## Project Structure
 
@@ -216,9 +250,23 @@ ruff check --fix . && ruff format .
 
 ## v1 Scope
 
-**In:** Passive log watching (4 CLIs), 2 MCP tools, 4 memory types, dual-mode Router Agent, SQLite + sqlite-vec
+**In:**
+- Passive log watching (4 CLIs) - 100% invisible during use
+- **Success detection: LLM classifies task outcomes (SUCCESS/FAILURE/UNCERTAIN)**
+- **Outcome-based memory extraction (SUCCESS→recipe, FAILURE→pitfall)**
+- 2 MCP tools
+- 4 memory types with importance levels
+- Dual-mode Router Agent (INGEST + ROUTE)
+- Near-duplicate deduplication (0.9 similarity threshold)
+- Heuristic scoring: similarity + importance + recency
+- SQLite + sqlite-vec
+- Soft-delete (state column), history tracking, access logging
+- UUID→integer mapping for LLM (prevents hallucination)
+- Structured exceptions with error codes
 
-**Future (v2):** Hooks output, file injection (AGENTS.md/GEMINI.md), cloud sync, team sharing
+**v1.1:** Two-level ROUTE (LLM selection for complex cases), user importance override, memory state expansion (paused/archived)
+
+**v2:** Hooks output, file injection (AGENTS.md/GEMINI.md), cloud sync, team sharing, reranker layer
 
 ## License
 

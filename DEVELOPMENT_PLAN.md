@@ -16,10 +16,37 @@ Modular development plan for v1 architecture with Rust daemon + Python Memory Se
 ┌─────────────────────────────────────────────────────────────────┐
 │                     PYTHON MEMORY SERVICE                       │
 │  Router Agent (dual-mode: INGEST + ROUTE)                       │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │ INGEST Mode: LLM analyzes Episode in one call:            │  │
+│  │   1. Identify Tasks (user goals within the episode)       │  │
+│  │   2. Classify each Task: SUCCESS | FAILURE | UNCERTAIN    │  │
+│  │   3. Extract memories: SUCCESS→recipe/project_fact,       │  │
+│  │      FAILURE→pitfall, UNCERTAIN→skip                      │  │
+│  └───────────────────────────────────────────────────────────┘  │
 │  ONNX Embeddings (all-MiniLM-L6-v2, 384-dim)                    │
 │  Retrieval + "Why" generation                                   │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+## Core Insight: Success Detection
+
+Passive learning from logs requires knowing WHAT succeeded and WHAT failed. Unlike explicit APIs where users call `memory.add()`, we must infer success from conversation patterns.
+
+**Success signals (implicit):**
+- AI says "done" / "complete" + User moves to next task → SUCCESS
+- Tests pass, build succeeds → SUCCESS
+- User says "thanks", "perfect", "works" → SUCCESS
+
+**Failure signals:**
+- Same error reappears after attempted fix → FAILURE
+- User says "still broken", "that didn't work" → FAILURE
+- User abandons task mid-conversation → UNCERTAIN
+
+**The LLM-decides-everything approach:**
+- One LLM call per Episode (4-hour window)
+- LLM segments tasks, classifies outcomes, extracts memories
+- No rules engine, no heuristics for task detection
+- 100% passive - no user prompts or confirmations
 
 ## Development Tracks
 
@@ -113,57 +140,90 @@ Storage) Daemon) Router) Retrieval)
   fn init_global_db() -> Result<Connection>  // ~/.sqrl/squirrel.db
   ```
 
-- [ ] Create tables (see ARCHITECTURE.md for full schema):
+- [ ] Create tables:
   ```sql
   CREATE TABLE memories (
     id TEXT PRIMARY KEY,
     content_hash TEXT NOT NULL UNIQUE,
     content TEXT NOT NULL,
-    memory_type TEXT NOT NULL,
-    repo TEXT NOT NULL,
+    memory_type TEXT NOT NULL,        -- user_style | project_fact | pitfall | recipe
+    repo TEXT NOT NULL,               -- repo path OR 'global' for user-level memories
     embedding BLOB,
     confidence REAL NOT NULL,
+    importance TEXT NOT NULL DEFAULT 'medium',  -- critical | high | medium | low
+    state TEXT NOT NULL DEFAULT 'active',       -- active | deleted (soft-delete)
+    user_id TEXT NOT NULL DEFAULT 'local',
+    assistant_id TEXT NOT NULL DEFAULT 'squirrel',
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT                             -- NULL unless state='deleted'
   );
 
-  CREATE TABLE events (id, cli, repo, event_type, content, file_paths, timestamp, processed);
-  CREATE TABLE episodes (id, repo, cli, start_ts, end_ts, event_ids, processed);
+  CREATE TABLE events (
+    id TEXT PRIMARY KEY,
+    repo TEXT NOT NULL,
+    kind TEXT NOT NULL,        -- user | assistant | tool | system
+    content TEXT NOT NULL,
+    file_paths TEXT,           -- JSON array
+    ts TEXT NOT NULL,
+    processed INTEGER DEFAULT 0
+  );
+
+  -- History table for audit trail (tracks memory changes)
+  CREATE TABLE memory_history (
+    id TEXT PRIMARY KEY,
+    memory_id TEXT NOT NULL,
+    old_content TEXT,          -- Previous content (NULL for ADD)
+    new_content TEXT NOT NULL, -- New content
+    event TEXT NOT NULL,       -- ADD | UPDATE | DELETE
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (memory_id) REFERENCES memories(id)
+  );
+
+  -- Access log for debugging memory retrieval behavior
+  CREATE TABLE memory_access_log (
+    id TEXT PRIMARY KEY,
+    memory_id TEXT NOT NULL,
+    access_type TEXT NOT NULL,  -- search | get_context | list
+    query TEXT,                 -- The query that triggered access
+    score REAL,                 -- Similarity score at access time
+    metadata TEXT,              -- JSON: additional debug info
+    accessed_at TEXT NOT NULL,
+    FOREIGN KEY (memory_id) REFERENCES memories(id)
+  );
+  -- Note: No episodes table - episodes are in-memory batching only
   ```
 
-- [ ] CRUD operations for events, episodes, memories
+- [ ] CRUD operations for events and memories
 
 ### A2. Event model (`events.rs`)
 
-- [ ] Define `Event` struct:
+- [ ] Define `Event` struct (normalized, CLI-agnostic):
   ```rust
   struct Event {
       id: String,
-      cli: String,        // claude_code | codex | cursor | gemini
       repo: String,
-      event_type: String, // user_message | assistant_response | tool_use | tool_result
+      kind: EventKind,     // User | Assistant | Tool | System
       content: String,
       file_paths: Vec<String>,
-      timestamp: DateTime<Utc>,
+      ts: DateTime<Utc>,
       processed: bool,
   }
   ```
 
-- [ ] Define `Episode` struct:
+- [ ] Define `Episode` struct (in-memory only, not persisted):
   ```rust
   struct Episode {
       id: String,
       repo: String,
-      cli: String,
       start_ts: DateTime<Utc>,
       end_ts: DateTime<Utc>,
-      event_ids: Vec<String>,
-      processed: bool,
+      events: Vec<Event>,  // Contains actual events, not IDs
   }
   ```
 
 - [ ] Dedup hash computation
-- [ ] Episode grouping (same repo + CLI + time gap < 20min)
+- [ ] Episode batching: 4-hour time window OR 50 events max (whichever first)
 
 ### A3. Config (`config.rs`)
 
@@ -229,38 +289,48 @@ Storage) Daemon) Router) Retrieval)
 
 - [ ] Multi-CLI log discovery:
   ```rust
-  fn find_log_paths(project: &Path) -> Vec<(CLI, PathBuf)> {
-      // ~/.claude/projects/<encoded>/    → Claude Code
-      // ~/.codex-cli/logs/               → Codex CLI
-      // ~/.gemini/logs/                  → Gemini CLI
-      // ~/.cursor-tutor/logs/            → Cursor
+  fn find_log_paths() -> Vec<PathBuf> {
+      // ~/.claude/projects/**/*.jsonl    → Claude Code
+      // ~/.codex-cli/logs/**/*.jsonl     → Codex CLI
+      // ~/.gemini/logs/**/*.jsonl        → Gemini CLI
+      // Note: All CLIs normalized to same Event schema
   }
   ```
 
 - [ ] JSONL tailer using `notify` crate:
   ```rust
   struct LogWatcher {
-      cli: CLI,
-      log_dir: PathBuf,
+      log_dirs: Vec<PathBuf>,
       file_positions: HashMap<PathBuf, u64>,
   }
   ```
 
-- [ ] Line parsers for each CLI format
+- [ ] Line parsers for each CLI format → normalized Event
 - [ ] Write events to SQLite
 
 ### B3. Episode Batching
 
-- [ ] Background task:
+- [ ] Per-repo event buffer:
   ```rust
-  async fn batch_events_loop(interval: Duration) {
-      // Every 30 seconds or 20 events:
-      // 1. Query unprocessed events
-      // 2. Group into episodes (same repo + CLI + time gap < 20min)
-      // 3. Send to Python via IPC
-      // 4. Mark as processed
+  struct EventBuffer {
+      repo: String,
+      events: Vec<Event>,
+      oldest_ts: DateTime<Utc>,
   }
   ```
+
+- [ ] Flush triggers:
+  ```rust
+  fn should_flush(buffer: &EventBuffer) -> bool {
+      const MAX_EVENTS: usize = 50;
+      const WINDOW_HOURS: i64 = 4;
+
+      buffer.events.len() >= MAX_EVENTS ||
+      buffer.age() >= Duration::hours(WINDOW_HOURS)
+  }
+  ```
+
+- [ ] On flush: create Episode, send to Python via IPC, mark events processed
 
 ### B4. IPC Client (`ipc.rs`)
 
@@ -315,12 +385,43 @@ Storage) Daemon) Router) Retrieval)
   async def ingest_mode(payload: dict) -> dict:
       """
       Input: {episode: {...}, events: [...]}
-      Output: {action: ADD|UPDATE|NOOP, memory?: {...}, confidence: float}
+      Output: {
+          tasks: [
+              {
+                  task: str,                          # What user was trying to do
+                  outcome: SUCCESS | FAILURE | UNCERTAIN,
+                  evidence: str,                      # Why this classification
+                  memories: [                         # Only if outcome != UNCERTAIN
+                      {type, content, importance, repo}
+                  ]
+              }
+          ],
+          confidence: float
+      }
 
-      LLM prompt determines:
-      - Is there a memorable pattern here?
-      - What type? (user_style, project_fact, pitfall, recipe)
-      - Does it duplicate existing memory?
+      LLM analyzes entire Episode in ONE call:
+      1. Segment into distinct Tasks (user goals like "fix bug X", "add feature Y")
+      2. For each Task, classify outcome:
+         - SUCCESS: User moved to next task, tests passed, "thanks"
+         - FAILURE: Same error recurs, "still broken", abandoned
+         - UNCERTAIN: Incomplete information, skip memory extraction
+      3. Extract memories based on outcome:
+         - SUCCESS → recipe (reusable pattern) or project_fact (learned info)
+         - FAILURE → pitfall (what NOT to do, with why it failed)
+         - UNCERTAIN → nothing
+
+      This is the core passive learning insight: we MUST know what succeeded
+      before extracting patterns. Competitors with explicit APIs (mem0) don't
+      need this - users explicitly call memory.add() for successes only.
+
+      Near-duplicate check (before ADD):
+      - Query sqlite-vec for similar memories (same type + repo, similarity > 0.9)
+      - If found, LLM decides: NOOP (exact dup) or UPDATE (merge info)
+
+      UUID→Integer Mapping (prevents LLM hallucination):
+      - When showing existing memories to LLM for dedup, map UUIDs to "0", "1", "2"
+      - LLM references memories by simple integer
+      - Map back to real UUIDs after LLM response
       """
   ```
 
@@ -328,10 +429,14 @@ Storage) Daemon) Router) Retrieval)
   ```python
   async def route_mode(payload: dict) -> dict:
       """
-      Input: {task: str, candidates: [...]}
+      Input: {task: str, candidates: [...], context_budget_tokens: int}
       Output: {selected: [...], why: {...}}
 
-      LLM selects which candidates are relevant and generates "why"
+      v1: Heuristic scoring to select within token budget
+      score = w_sim * similarity + w_imp * importance_weight + w_rec * recency_score
+      (importance_weight: critical=1.0, high=0.75, medium=0.5, low=0.25)
+
+      v1.1 (future): LLM-based selection for complex disambiguation
       """
   ```
 
@@ -339,16 +444,25 @@ Storage) Daemon) Router) Retrieval)
 
 - [ ] Memory schema:
   ```python
+  class MemoryState(str, Enum):
+      active = "active"
+      deleted = "deleted"
+
   class Memory(BaseModel):
       id: str
       content_hash: str
       content: str
       memory_type: Literal["user_style", "project_fact", "pitfall", "recipe"]
-      repo: str
+      repo: str                    # repo path OR 'global' for user-level memories
       embedding: Optional[bytes]
       confidence: float
+      importance: Literal["critical", "high", "medium", "low"] = "medium"
+      state: MemoryState = MemoryState.active  # Soft-delete support
+      user_id: str = "local"
+      assistant_id: str = "squirrel"
       created_at: datetime
       updated_at: datetime
+      deleted_at: Optional[datetime] = None    # NULL unless state='deleted'
   ```
 
 - [ ] IPC request/response schemas:
@@ -361,7 +475,45 @@ Storage) Daemon) Router) Retrieval)
       repo: str
       task: Optional[str]
       memory_types: Optional[list[str]]
+      context_budget_tokens: int = 400   # Token limit for memory injection
       max_results: int = 20
+  ```
+
+### C4. Structured Exceptions (`exceptions.py`)
+
+- [ ] Exception hierarchy with error codes and suggestions:
+  ```python
+  class SquirrelError(Exception):
+      """Base exception with error code and user-friendly suggestion."""
+      def __init__(self, message: str, error_code: str, suggestion: str = None, details: dict = None):
+          self.message = message
+          self.error_code = error_code
+          self.suggestion = suggestion
+          self.details = details or {}
+          super().__init__(message)
+
+  class MemoryNotFoundError(SquirrelError):
+      """Memory ID does not exist."""
+      pass
+
+  class ExtractionError(SquirrelError):
+      """LLM extraction failed."""
+      pass
+
+  class EmbeddingError(SquirrelError):
+      """ONNX embedding failed."""
+      pass
+
+  class StorageError(SquirrelError):
+      """SQLite/sqlite-vec operation failed."""
+      pass
+
+  # Usage:
+  # raise MemoryNotFoundError(
+  #     message=f"Memory {memory_id} not found",
+  #     error_code="MEM_404",
+  #     suggestion="Check if the memory ID is correct or if it was deleted"
+  # )
   ```
 
 ---
@@ -412,20 +564,129 @@ Storage) Daemon) Router) Retrieval)
       # Simple keyword matching + template filling
   ```
 
-### D3. Memory Update Logic
+### D3. UUID Mapping Helpers (`utils.py`)
 
-- [ ] Confidence threshold (0.7):
+- [ ] UUID→integer mapping (prevents LLM hallucination):
   ```python
-  async def process_ingest_result(result: dict, existing: list[Memory]) -> Memory | None:
+  def prepare_memories_for_llm(memories: list[Memory]) -> tuple[list[dict], dict[str, str]]:
+      """Map UUIDs to integers before sending to LLM."""
+      uuid_mapping = {}
+      prepared = []
+      for idx, memory in enumerate(memories):
+          uuid_mapping[str(idx)] = memory.id
+          prepared.append({"id": str(idx), "content": memory.content, "type": memory.memory_type})
+      return prepared, uuid_mapping
+
+  def restore_memory_ids(llm_response: list[dict], uuid_mapping: dict[str, str]) -> list[dict]:
+      """Map integers back to UUIDs after LLM response."""
+      for item in llm_response:
+          if item.get("id") in uuid_mapping:
+              item["id"] = uuid_mapping[item["id"]]
+      return llm_response
+  ```
+
+### D4. Near-Duplicate Check + Memory Update
+
+- [ ] Near-duplicate detection (before ADD):
+  ```python
+  async def check_near_duplicate(
+      memory: Memory,
+      similarity_threshold: float = 0.9
+  ) -> tuple[bool, Optional[Memory]]:
+      """
+      Query sqlite-vec for similar memories with same type + repo.
+      Returns (is_duplicate, existing_memory_if_found)
+      """
+      candidates = await retrieve_candidates(
+          repo=memory.repo,
+          task=memory.content,
+          memory_types=[memory.memory_type],
+          top_k=5
+      )
+      for candidate in candidates:
+          if candidate.similarity >= similarity_threshold:
+              return True, candidate
+      return False, None
+  ```
+
+- [ ] Confidence threshold (0.7) + dedup:
+  ```python
+  async def process_ingest_result(result: dict) -> Memory | None:
       if result["action"] == "NOOP":
           return None
       if result["confidence"] < 0.7:
           return None
 
       if result["action"] == "ADD":
-          return create_memory(result["memory"])
+          memory = build_memory(result["memory"])
+          is_dup, existing = await check_near_duplicate(memory)
+          if is_dup:
+              # LLM already handled dedup, but double-check via embedding
+              # If truly duplicate, return None; else merge
+              return await merge_or_skip(memory, existing)
+          return create_memory(memory)
       elif result["action"] == "UPDATE":
-          return update_memory(result["memory"], existing)
+          return update_memory(result["memory"])
+  ```
+
+### D5. History Tracking + Access Logging
+
+- [ ] History tracking on memory changes:
+  ```python
+  async def create_memory(memory: Memory) -> Memory:
+      """Create memory and log to history table."""
+      # Insert memory
+      await db.execute("INSERT INTO memories (...) VALUES (...)", memory)
+      # Log to history
+      await db.execute("""
+          INSERT INTO memory_history (id, memory_id, old_content, new_content, event, created_at)
+          VALUES (?, ?, NULL, ?, 'ADD', datetime('now'))
+      """, (uuid4(), memory.id, memory.content))
+      return memory
+
+  async def update_memory(memory_id: str, new_content: str) -> Memory:
+      """Update memory and log old→new to history table."""
+      old = await db.fetch_one("SELECT content FROM memories WHERE id = ?", memory_id)
+      await db.execute("UPDATE memories SET content = ?, updated_at = datetime('now') WHERE id = ?",
+                       (new_content, memory_id))
+      await db.execute("""
+          INSERT INTO memory_history (id, memory_id, old_content, new_content, event, created_at)
+          VALUES (?, ?, ?, ?, 'UPDATE', datetime('now'))
+      """, (uuid4(), memory_id, old.content, new_content))
+
+  async def delete_memory(memory_id: str) -> None:
+      """Soft-delete memory (set state='deleted') and log to history."""
+      await db.execute("""
+          UPDATE memories SET state = 'deleted', deleted_at = datetime('now')
+          WHERE id = ?
+      """, memory_id)
+      await db.execute("""
+          INSERT INTO memory_history (id, memory_id, old_content, new_content, event, created_at)
+          VALUES (?, ?, NULL, NULL, 'DELETE', datetime('now'))
+      """, (uuid4(), memory_id))
+  ```
+
+- [ ] Access logging for debugging:
+  ```python
+  async def log_memory_access(
+      memory_id: str,
+      access_type: str,  # "search" | "get_context" | "list"
+      query: str = None,
+      score: float = None,
+      metadata: dict = None
+  ) -> None:
+      """Log memory access for debugging retrieval behavior."""
+      await db.execute("""
+          INSERT INTO memory_access_log (id, memory_id, access_type, query, score, metadata, accessed_at)
+          VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+      """, (uuid4(), memory_id, access_type, query, score, json.dumps(metadata or {})))
+
+  # Usage in retrieval.py:
+  async def retrieve_candidates(...) -> list[Memory]:
+      results = await vector_search(...)
+      for r in results:
+          await log_memory_access(r.id, "search", query=task, score=r.similarity)
+      return results
   ```
 
 ---
@@ -444,7 +705,7 @@ Storage) Daemon) Router) Retrieval)
       input_schema: {
           "project_root": "string (required)",
           "task": "string (required)",
-          "max_tokens": "integer (default: 400)",
+          "context_budget_tokens": "integer (default: 400)",  // Token limit for memory injection
           "memory_types": "array of strings (optional)"
       }
   }
@@ -468,9 +729,10 @@ Storage) Daemon) Router) Retrieval)
   ```rust
   async fn handle_get_task_context(args: Value) -> Result<Value> {
       // 1. Retrieve candidates via IPC (fetch_memories)
-      // 2. Call Router Agent (route mode) via IPC
-      // 3. Format response with "why" explanations
-      // 4. Respect max_tokens budget
+      // 2. Call Router Agent (route mode) via IPC with context_budget_tokens
+      // 3. Route mode scores: w_sim * similarity + w_imp * importance + w_rec * recency
+      // 4. Select memories until token budget exhausted
+      // 5. Format response with "why" explanations
   }
   ```
 
@@ -565,11 +827,63 @@ Storage) Daemon) Router) Retrieval)
 
 ---
 
+## v1.1 Scope (Future Enhancement)
+
+Deferred from v1:
+- Two-level ROUTE: LLM-based selection for complex disambiguation
+- User override of importance via CLI (`sqrl memory set-importance <id> critical`)
+- Memory state expansion: add `paused` and `archived` states (v1 uses active/deleted only)
+- `sqrl debug` command: query memory_access_log to debug retrieval behavior
+
 ## v2 Scope (Future)
 
 Not in v1:
 - Hooks output for Claude Code / Gemini CLI
 - File injection for AGENTS.md / GEMINI.md
-- Cloud sync
+- Cloud sync (user_id/assistant_id fields prepared)
 - Team memory sharing
 - Web dashboard
+- Reranker layer: post-retrieval LLM reranking for improved precision at scale
+- Previous memory in update response (for client audit display)
+
+---
+
+## Patterns Adopted from Competitor Analysis
+
+The following patterns were incorporated from analyzing mem0/OpenMemory, Memori, and claude-cache:
+
+| Pattern | Source | Location in Plan |
+|---------|--------|------------------|
+| UUID→integer mapping for LLM | mem0 | Track C (INGEST mode), Track D (D3) |
+| History tracking (old/new content) | mem0 | Track A (memory_history table), Track D (D5) |
+| Structured exceptions with codes | mem0 | Track C (C4) |
+| Memory state machine (soft-delete) | mem0 | Track A (state column), Track C (MemoryState enum) |
+| Access logging for debugging | mem0 | Track A (memory_access_log table), Track D (D5) |
+| **Success detection (implicit signals)** | claude-cache | Core Architecture, Track C (INGEST mode) |
+| **Anti-pattern/pitfall learning** | claude-cache | Memory types (pitfall), INGEST mode |
+| **LLM-decides-everything approach** | claude-cache + simplification | Track C (INGEST mode) |
+
+### Critical Insight from claude-cache (0-star repo)
+
+claude-cache solved the core problem we overlooked: **how do you know what to learn from passive observation?**
+
+Their approach (multi-signal success detection):
+- Explicit: "thanks", "that worked", tests pass
+- Implicit: AI says "done" + User moves to next task = SUCCESS
+- Behavioral: Task transition without complaints = SUCCESS
+
+Our simplification:
+- No complex rules engine or signal weighting
+- Single LLM call per Episode decides everything (task segmentation + outcome + memories)
+- Let the LLM understand conversation semantics instead of regex patterns
+
+This is why mem0 (50k stars) didn't help us - their users explicitly call `memory.add()`.
+Only passive learning systems need success detection.
+
+Patterns explicitly NOT adopted:
+- Two LLM calls per memory add (expensive) - we use single-pass extraction
+- Heavy infrastructure (22 vector stores) - we use SQLite-only
+- LLM-based categorization on insert - we use source-based categories
+- Explicit API approach - we use passive CLI watching
+- Complex Task/Attempt hierarchy - we let LLM segment tasks naturally
+- Rules engines for success detection - LLM understands context better

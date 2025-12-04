@@ -1,0 +1,13 @@
+node_modules
+/node_modules
+node_modules/
+.env.local
+.cursor/
+/.cursor
+
+tasks/
+/tasks
+
+*.tgz
+
+.cursorrules
