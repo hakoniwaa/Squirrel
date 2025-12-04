@@ -105,8 +105,18 @@ AI calls squirrel_get_task_context("Add delete endpoint")
 |-------|-------------|
 | `importance` | critical / high / medium / low - used in retrieval scoring |
 | `repo` | repo path OR 'global' for user-level memories |
+| `state` | active / deleted - soft-delete for recovery |
 | `user_id` | 'local' for v1, prepared for future cloud/team features |
 | `assistant_id` | 'squirrel' for v1, prepared for multi-agent scenarios |
+
+## Data Integrity
+
+| Feature | Purpose |
+|---------|---------|
+| History tracking | Logs old/new content on every ADD/UPDATE/DELETE for audit trail |
+| Access logging | Logs every memory retrieval with query and score for debugging |
+| UUID→integer mapping | Prevents LLM hallucinating memory IDs during dedup |
+| Soft-delete | state='deleted' instead of hard delete for recovery |
 
 ## Project Structure
 
@@ -233,10 +243,13 @@ ruff check --fix . && ruff format .
 - Near-duplicate deduplication (0.9 similarity threshold)
 - Heuristic scoring: similarity + importance + recency
 - SQLite + sqlite-vec
+- Soft-delete (state column), history tracking, access logging
+- UUID→integer mapping for LLM (prevents hallucination)
+- Structured exceptions with error codes
 
-**v1.1:** Two-level ROUTE (LLM selection for complex cases), user importance override
+**v1.1:** Two-level ROUTE (LLM selection for complex cases), user importance override, memory state expansion (paused/archived)
 
-**v2:** Hooks output, file injection (AGENTS.md/GEMINI.md), cloud sync, team sharing
+**v2:** Hooks output, file injection (AGENTS.md/GEMINI.md), cloud sync, team sharing, reranker layer
 
 ## License
 

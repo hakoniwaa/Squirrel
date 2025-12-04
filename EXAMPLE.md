@@ -165,7 +165,29 @@ Decide:
 Return: {action: ADD|UPDATE|NOOP, memories: [{type, content, importance, repo}], confidence: 0.0-1.0}
 ```
 
-### Step 3.2: Near-Duplicate Check + Save Memory
+### Step 3.2: UUID→Integer Mapping for LLM
+
+When showing existing memories to LLM for dedup, map UUIDs to simple integers to prevent hallucination:
+
+```python
+def prepare_memories_for_llm(memories: list[Memory]) -> tuple[list[dict], dict[str, str]]:
+    """LLMs can hallucinate UUIDs. Use simple integers instead."""
+    uuid_mapping = {}
+    prepared = []
+    for idx, memory in enumerate(memories):
+        uuid_mapping[str(idx)] = memory.id  # "0" -> "uuid-xxx-xxx"
+        prepared.append({"id": str(idx), "content": memory.content})
+    return prepared, uuid_mapping
+
+# After LLM response, map back to real UUIDs
+def restore_memory_ids(llm_response, uuid_mapping):
+    for item in llm_response:
+        if item.get("id") in uuid_mapping:
+            item["id"] = uuid_mapping[item["id"]]
+    return llm_response
+```
+
+### Step 3.3: Near-Duplicate Check + Save Memory
 
 If confidence >= 0.7 and action is ADD:
 
@@ -195,12 +217,23 @@ let memory = Memory {
     embedding: embed(&content),   // 384-dim ONNX
     confidence: 0.85,
     importance: "high",           // LLM-assigned importance
+    state: "active",              // active | deleted (soft-delete)
     user_id: "local",
     assistant_id: "squirrel",
     created_at: now(),
     updated_at: now(),
+    deleted_at: None,             // NULL unless state='deleted'
 };
 storage.save_memory(memory)?;
+
+// Log to history table for audit trail
+storage.log_history(HistoryEntry {
+    memory_id: memory.id,
+    old_content: None,            // NULL for ADD
+    new_content: memory.content,
+    event: "ADD",
+    created_at: now(),
+});
 ```
 
 ---
@@ -233,6 +266,16 @@ async def route_mode(payload: dict) -> dict:
     # importance_weight: critical=1.0, high=0.75, medium=0.5, low=0.25
     scored = score_candidates(candidates, task)
     selected = select_within_budget(scored, budget)
+
+    # Log access for debugging retrieval behavior
+    for memory in selected:
+        await log_memory_access(
+            memory_id=memory.id,
+            access_type="get_context",
+            query=task,
+            score=memory.score,
+            metadata={"budget": budget, "selected_count": len(selected)}
+        )
 
     return {
         "memories": [
@@ -300,10 +343,41 @@ CREATE TABLE memories (
     embedding BLOB,                   -- 384-dim float32
     confidence REAL NOT NULL,
     importance TEXT NOT NULL DEFAULT 'medium',  -- critical | high | medium | low
+    state TEXT NOT NULL DEFAULT 'active',       -- active | deleted (soft-delete)
     user_id TEXT NOT NULL DEFAULT 'local',
     assistant_id TEXT NOT NULL DEFAULT 'squirrel',
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT                             -- NULL unless state='deleted'
+);
+```
+
+### Memory History (audit trail)
+
+```sql
+CREATE TABLE memory_history (
+    id TEXT PRIMARY KEY,
+    memory_id TEXT NOT NULL,
+    old_content TEXT,          -- Previous content (NULL for ADD)
+    new_content TEXT NOT NULL, -- New content
+    event TEXT NOT NULL,       -- ADD | UPDATE | DELETE
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (memory_id) REFERENCES memories(id)
+);
+```
+
+### Memory Access Log (debugging retrieval)
+
+```sql
+CREATE TABLE memory_access_log (
+    id TEXT PRIMARY KEY,
+    memory_id TEXT NOT NULL,
+    access_type TEXT NOT NULL,  -- search | get_context | list
+    query TEXT,                 -- The query that triggered access
+    score REAL,                 -- Similarity score at access time
+    metadata TEXT,              -- JSON: additional debug info
+    accessed_at TEXT NOT NULL,
+    FOREIGN KEY (memory_id) REFERENCES memories(id)
 );
 ```
 
@@ -334,3 +408,7 @@ CREATE TABLE memories (
 | Importance levels | critical/high/medium/low | Prioritize memories in retrieval |
 | Near-duplicate threshold | 0.9 similarity | Avoid redundant memories |
 | ROUTE mode (v1) | Heuristic scoring | Fast, no LLM call needed |
+| UUID→integer mapping | Map before LLM, restore after | Prevents LLM hallucinating UUIDs |
+| Memory deletion | Soft-delete (state column) | Recoverable, audit trail |
+| History tracking | old/new content per change | Debug, rollback capability |
+| Access logging | Log every retrieval | Debug why memories surface |

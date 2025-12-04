@@ -124,10 +124,12 @@ Storage) Daemon) Router) Retrieval)
     embedding BLOB,
     confidence REAL NOT NULL,
     importance TEXT NOT NULL DEFAULT 'medium',  -- critical | high | medium | low
+    state TEXT NOT NULL DEFAULT 'active',       -- active | deleted (soft-delete)
     user_id TEXT NOT NULL DEFAULT 'local',
     assistant_id TEXT NOT NULL DEFAULT 'squirrel',
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT                             -- NULL unless state='deleted'
   );
 
   CREATE TABLE events (
@@ -138,6 +140,29 @@ Storage) Daemon) Router) Retrieval)
     file_paths TEXT,           -- JSON array
     ts TEXT NOT NULL,
     processed INTEGER DEFAULT 0
+  );
+
+  -- History table for audit trail (tracks memory changes)
+  CREATE TABLE memory_history (
+    id TEXT PRIMARY KEY,
+    memory_id TEXT NOT NULL,
+    old_content TEXT,          -- Previous content (NULL for ADD)
+    new_content TEXT NOT NULL, -- New content
+    event TEXT NOT NULL,       -- ADD | UPDATE | DELETE
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (memory_id) REFERENCES memories(id)
+  );
+
+  -- Access log for debugging memory retrieval behavior
+  CREATE TABLE memory_access_log (
+    id TEXT PRIMARY KEY,
+    memory_id TEXT NOT NULL,
+    access_type TEXT NOT NULL,  -- search | get_context | list
+    query TEXT,                 -- The query that triggered access
+    score REAL,                 -- Similarity score at access time
+    metadata TEXT,              -- JSON: additional debug info
+    accessed_at TEXT NOT NULL,
+    FOREIGN KEY (memory_id) REFERENCES memories(id)
   );
   -- Note: No episodes table - episodes are in-memory batching only
   ```
@@ -344,6 +369,11 @@ Storage) Daemon) Router) Retrieval)
       Near-duplicate check (before ADD):
       - Query sqlite-vec for similar memories (same type + repo, similarity > 0.9)
       - If found, LLM decides: NOOP (exact dup) or UPDATE (merge info)
+
+      UUID→Integer Mapping (prevents LLM hallucination):
+      - When showing existing memories to LLM for dedup, map UUIDs to "0", "1", "2"
+      - LLM references memories by simple integer
+      - Map back to real UUIDs after LLM response
       """
   ```
 
@@ -366,6 +396,10 @@ Storage) Daemon) Router) Retrieval)
 
 - [ ] Memory schema:
   ```python
+  class MemoryState(str, Enum):
+      active = "active"
+      deleted = "deleted"
+
   class Memory(BaseModel):
       id: str
       content_hash: str
@@ -375,10 +409,12 @@ Storage) Daemon) Router) Retrieval)
       embedding: Optional[bytes]
       confidence: float
       importance: Literal["critical", "high", "medium", "low"] = "medium"
+      state: MemoryState = MemoryState.active  # Soft-delete support
       user_id: str = "local"
       assistant_id: str = "squirrel"
       created_at: datetime
       updated_at: datetime
+      deleted_at: Optional[datetime] = None    # NULL unless state='deleted'
   ```
 
 - [ ] IPC request/response schemas:
@@ -393,6 +429,43 @@ Storage) Daemon) Router) Retrieval)
       memory_types: Optional[list[str]]
       context_budget_tokens: int = 400   # Token limit for memory injection
       max_results: int = 20
+  ```
+
+### C4. Structured Exceptions (`exceptions.py`)
+
+- [ ] Exception hierarchy with error codes and suggestions:
+  ```python
+  class SquirrelError(Exception):
+      """Base exception with error code and user-friendly suggestion."""
+      def __init__(self, message: str, error_code: str, suggestion: str = None, details: dict = None):
+          self.message = message
+          self.error_code = error_code
+          self.suggestion = suggestion
+          self.details = details or {}
+          super().__init__(message)
+
+  class MemoryNotFoundError(SquirrelError):
+      """Memory ID does not exist."""
+      pass
+
+  class ExtractionError(SquirrelError):
+      """LLM extraction failed."""
+      pass
+
+  class EmbeddingError(SquirrelError):
+      """ONNX embedding failed."""
+      pass
+
+  class StorageError(SquirrelError):
+      """SQLite/sqlite-vec operation failed."""
+      pass
+
+  # Usage:
+  # raise MemoryNotFoundError(
+  #     message=f"Memory {memory_id} not found",
+  #     error_code="MEM_404",
+  #     suggestion="Check if the memory ID is correct or if it was deleted"
+  # )
   ```
 
 ---
@@ -443,7 +516,28 @@ Storage) Daemon) Router) Retrieval)
       # Simple keyword matching + template filling
   ```
 
-### D3. Near-Duplicate Check + Memory Update
+### D3. UUID Mapping Helpers (`utils.py`)
+
+- [ ] UUID→integer mapping (prevents LLM hallucination):
+  ```python
+  def prepare_memories_for_llm(memories: list[Memory]) -> tuple[list[dict], dict[str, str]]:
+      """Map UUIDs to integers before sending to LLM."""
+      uuid_mapping = {}
+      prepared = []
+      for idx, memory in enumerate(memories):
+          uuid_mapping[str(idx)] = memory.id
+          prepared.append({"id": str(idx), "content": memory.content, "type": memory.memory_type})
+      return prepared, uuid_mapping
+
+  def restore_memory_ids(llm_response: list[dict], uuid_mapping: dict[str, str]) -> list[dict]:
+      """Map integers back to UUIDs after LLM response."""
+      for item in llm_response:
+          if item.get("id") in uuid_mapping:
+              item["id"] = uuid_mapping[item["id"]]
+      return llm_response
+  ```
+
+### D4. Near-Duplicate Check + Memory Update
 
 - [ ] Near-duplicate detection (before ADD):
   ```python
@@ -485,6 +579,66 @@ Storage) Daemon) Router) Retrieval)
           return create_memory(memory)
       elif result["action"] == "UPDATE":
           return update_memory(result["memory"])
+  ```
+
+### D5. History Tracking + Access Logging
+
+- [ ] History tracking on memory changes:
+  ```python
+  async def create_memory(memory: Memory) -> Memory:
+      """Create memory and log to history table."""
+      # Insert memory
+      await db.execute("INSERT INTO memories (...) VALUES (...)", memory)
+      # Log to history
+      await db.execute("""
+          INSERT INTO memory_history (id, memory_id, old_content, new_content, event, created_at)
+          VALUES (?, ?, NULL, ?, 'ADD', datetime('now'))
+      """, (uuid4(), memory.id, memory.content))
+      return memory
+
+  async def update_memory(memory_id: str, new_content: str) -> Memory:
+      """Update memory and log old→new to history table."""
+      old = await db.fetch_one("SELECT content FROM memories WHERE id = ?", memory_id)
+      await db.execute("UPDATE memories SET content = ?, updated_at = datetime('now') WHERE id = ?",
+                       (new_content, memory_id))
+      await db.execute("""
+          INSERT INTO memory_history (id, memory_id, old_content, new_content, event, created_at)
+          VALUES (?, ?, ?, ?, 'UPDATE', datetime('now'))
+      """, (uuid4(), memory_id, old.content, new_content))
+
+  async def delete_memory(memory_id: str) -> None:
+      """Soft-delete memory (set state='deleted') and log to history."""
+      await db.execute("""
+          UPDATE memories SET state = 'deleted', deleted_at = datetime('now')
+          WHERE id = ?
+      """, memory_id)
+      await db.execute("""
+          INSERT INTO memory_history (id, memory_id, old_content, new_content, event, created_at)
+          VALUES (?, ?, NULL, NULL, 'DELETE', datetime('now'))
+      """, (uuid4(), memory_id))
+  ```
+
+- [ ] Access logging for debugging:
+  ```python
+  async def log_memory_access(
+      memory_id: str,
+      access_type: str,  # "search" | "get_context" | "list"
+      query: str = None,
+      score: float = None,
+      metadata: dict = None
+  ) -> None:
+      """Log memory access for debugging retrieval behavior."""
+      await db.execute("""
+          INSERT INTO memory_access_log (id, memory_id, access_type, query, score, metadata, accessed_at)
+          VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+      """, (uuid4(), memory_id, access_type, query, score, json.dumps(metadata or {})))
+
+  # Usage in retrieval.py:
+  async def retrieve_candidates(...) -> list[Memory]:
+      results = await vector_search(...)
+      for r in results:
+          await log_memory_access(r.id, "search", query=task, score=r.similarity)
+      return results
   ```
 
 ---
@@ -630,6 +784,8 @@ Storage) Daemon) Router) Retrieval)
 Deferred from v1:
 - Two-level ROUTE: LLM-based selection for complex disambiguation
 - User override of importance via CLI (`sqrl memory set-importance <id> critical`)
+- Memory state expansion: add `paused` and `archived` states (v1 uses active/deleted only)
+- `sqrl debug` command: query memory_access_log to debug retrieval behavior
 
 ## v2 Scope (Future)
 
@@ -639,3 +795,25 @@ Not in v1:
 - Cloud sync (user_id/assistant_id fields prepared)
 - Team memory sharing
 - Web dashboard
+- Reranker layer: post-retrieval LLM reranking for improved precision at scale
+- Previous memory in update response (for client audit display)
+
+---
+
+## Patterns Adopted from Competitor Analysis
+
+The following patterns were incorporated from analyzing mem0/OpenMemory and Memori:
+
+| Pattern | Source | Location in Plan |
+|---------|--------|------------------|
+| UUID→integer mapping for LLM | mem0 | Track C (INGEST mode), Track D (D3) |
+| History tracking (old/new content) | mem0 | Track A (memory_history table), Track D (D5) |
+| Structured exceptions with codes | mem0 | Track C (C4) |
+| Memory state machine (soft-delete) | mem0 | Track A (state column), Track C (MemoryState enum) |
+| Access logging for debugging | mem0 | Track A (memory_access_log table), Track D (D5) |
+
+Patterns explicitly NOT adopted:
+- Two LLM calls per memory add (expensive) - we use single-pass extraction
+- Heavy infrastructure (22 vector stores) - we use SQLite-only
+- LLM-based categorization on insert - we use source-based categories
+- Explicit API approach - we use passive CLI watching
