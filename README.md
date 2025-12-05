@@ -224,9 +224,9 @@ sqrl config set llm.model claude-sonnet
 ```toml
 # ~/.sqrl/config.toml
 [llm]
-api_key = "sk-ant-..."
-model = "claude-sonnet-4-20250514"
-small_model = "claude-haiku"      # For agent operations
+provider = "gemini"               # gemini | deepseek | openai | anthropic
+api_key = "..."
+model = "gemini-2.5-flash"        # Primary model for agent
 
 [daemon]
 idle_timeout_hours = 2            # Stop after N hours inactive

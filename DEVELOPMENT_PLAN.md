@@ -130,9 +130,9 @@ agent/src/
 ### Python Module (`memory_service/`)
 
 Dependencies:
+- `pydantic-ai` (agent framework)
+- `litellm` (multi-provider LLM support)
 - `onnxruntime` (embeddings)
-- `sentence-transformers` (model loading)
-- `anthropic` (agent LLM)
 - `pydantic` (schemas)
 
 Directory structure:
@@ -308,7 +308,7 @@ async def handle_connection(reader, writer):
 
 ### C2. Squirrel Agent (`agent.py`)
 
-Single LLM-powered agent with tools. Uses small fast model (Haiku/GPT-4o-mini).
+Single LLM-powered agent with tools using PydanticAI framework. Uses cheap fast model (Gemini Flash/DeepSeek).
 
 ```python
 class SquirrelAgent:
