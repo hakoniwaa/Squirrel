@@ -64,10 +64,17 @@ Uses Nix via devenv (ADR-006). Single command:
 devenv shell
 ```
 
+Available commands:
+- `test-all` - Run all tests
+- `dev-daemon` - Start daemon in dev mode
+- `fmt` - Format all code
+- `lint` - Lint all code
+
 ## Team Standards
 
 ### Communication
 - No unnecessary emojis
+- Documentation written for AI comprehension
 - English only in code, comments, commits
 - Brief, direct language
 - Today's date: 2025 Dec 9
@@ -75,6 +82,7 @@ devenv shell
 ### Git Workflow
 
 Branch: `yourname/type-description`
+- `feat`, `fix`, `refactor`, `docs`, `test`, `chore`
 
 Commit: `type(scope): brief description`
 - Reference spec IDs when applicable
@@ -84,3 +92,8 @@ Commit: `type(scope): brief description`
 - Keep files under 200 lines
 - Only change what's necessary (DR5)
 - No drive-by refactoring
+
+### Security
+- Never commit secrets
+- Validate user input
+- Review AI-generated code
