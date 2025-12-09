@@ -13,7 +13,6 @@ Modular development plan with Rust daemon + Python Agent communicating via Unix 
 | **Agent Framework** | PydanticAI | Python agent with tools |
 | **LLM Client** | LiteLLM | Multi-provider support |
 | **Embeddings** | OpenAI text-embedding-3-small | 1536-dim, API-based |
-| **Cloud Sync** | SQLite Session Extension | Changeset-based sync for team DB |
 | **Build/Release** | dist (cargo-dist) | Generates Homebrew, MSI, installers |
 | **Auto-update** | axoupdater | dist's official updater |
 | **Python Packaging** | PyInstaller | Bundled, zero user deps |
@@ -71,23 +70,91 @@ Modular development plan with Rust daemon + Python Agent communicating via Unix 
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-## Core Insight: Success Detection
+## Core Insight: Episode Segmentation
 
-Passive learning from logs requires knowing WHAT succeeded and WHAT failed. Unlike explicit APIs where users call `memory.add()`, we infer success from conversation patterns.
+Not all sessions are coding tasks with success/failure outcomes. Sessions include architecture discussions, research, brainstorming - these produce valuable memories but don't fit the success/failure model.
 
-**Success signals (implicit):**
+**Episode → Segments → Memories (single LLM call):**
+
+1. **Segment the episode** by kind (not by task success/failure)
+2. **Extract memories** based on segment kind
+3. **Only EXECUTION_TASK segments** get SUCCESS/FAILURE classification
+
+### Segment Kinds
+
+| Kind | Description | Outcome Field | Memory Output |
+|------|-------------|---------------|---------------|
+| `EXECUTION_TASK` | Coding, fixing bugs, running commands | `outcome`: SUCCESS / FAILURE / UNCERTAIN | lesson (with outcome), fact |
+| `PLANNING_DECISION` | Architecture, design, tech choices | `resolution`: DECIDED / OPEN | fact, lesson (rationale), profile |
+| `RESEARCH_LEARNING` | Learning, exploring docs, asking questions | `resolution`: ANSWERED / PARTIAL | fact, lesson |
+| `DISCUSSION` | Brainstorming, market research, chat | (none) | profile, lesson (insights) |
+
+**Key rule:** SUCCESS/FAILURE only allowed on EXECUTION_TASK. Other kinds never output FAILURE.
+
+### Success/Failure Detection (EXECUTION_TASK only)
+
+**Success signals (require evidence):**
 - AI says "done" / "complete" + User moves to next task → SUCCESS
 - Tests pass, build succeeds → SUCCESS
 - User says "thanks", "perfect", "works" → SUCCESS
 
-**Failure signals:**
+**Failure signals (require evidence):**
 - Same error reappears after attempted fix → FAILURE
 - User says "still broken", "that didn't work" → FAILURE
-- User abandons task mid-conversation → UNCERTAIN
+
+**No evidence → UNCERTAIN** (conservative default)
+
+### Episode Ingestion Output Schema
+
+```json
+{
+  "episode_summary": "...",
+  "segments": [
+    {
+      "id": "seg_1",
+      "kind": "EXECUTION_TASK",
+      "title": "Fix auth 500 on null user_id",
+      "event_range": [12, 33],
+      "outcome": {
+        "status": "SUCCESS",
+        "evidence": ["event#31 tests passed", "event#33 user confirmed"]
+      }
+    },
+    {
+      "id": "seg_2",
+      "kind": "PLANNING_DECISION",
+      "title": "Choose sync conflict strategy",
+      "event_range": [34, 44],
+      "resolution": "DECIDED",
+      "decision": {
+        "choice": "server-wins",
+        "rationale": ["shared team DB", "simplicity"]
+      }
+    }
+  ],
+  "memories": [
+    {
+      "memory_type": "FACT",
+      "scope": "PROJECT",
+      "content": "Project uses PostgreSQL 15 via Prisma.",
+      "source_segments": ["seg_1"],
+      "confidence": 0.86
+    },
+    {
+      "memory_type": "LESSON",
+      "scope": "PROJECT",
+      "outcome": "failure",
+      "content": "Validate user_id before DB insert to avoid 500s.",
+      "source_segments": ["seg_1"],
+      "confidence": 0.9
+    }
+  ]
+}
+```
 
 **The LLM-decides-everything approach:**
 - One LLM call per Episode (4-hour window)
-- LLM segments tasks, classifies outcomes, extracts memories
+- LLM segments by kind first, then extracts memories per segment
 - No rules engine, no heuristics for task detection
 - 100% passive - no user prompts or confirmations
 
@@ -182,41 +249,27 @@ memory_service/
 
 SQLite + sqlite-vec initialization:
 ```sql
--- memories table (individual DB: squirrel.db)
+-- memories table (squirrel.db)
 CREATE TABLE memories (
   id TEXT PRIMARY KEY,
   content_hash TEXT NOT NULL UNIQUE,
   content TEXT NOT NULL,
-  memory_type TEXT NOT NULL,        -- user_style | user_profile | process | pitfall | recipe | project_fact
+  memory_type TEXT NOT NULL,        -- lesson | fact | profile
+  outcome TEXT,                     -- success | failure (for lesson type)
+  fact_type TEXT,                   -- knowledge | process (for fact type)
+  scope TEXT NOT NULL,              -- global | project
   repo TEXT NOT NULL,               -- repo path OR 'global'
   embedding BLOB,                   -- 1536-dim float32 (text-embedding-3-small)
   confidence REAL NOT NULL,
   importance TEXT NOT NULL DEFAULT 'medium',  -- critical | high | medium | low
-  state TEXT NOT NULL DEFAULT 'active',       -- active | deleted
+  status TEXT NOT NULL DEFAULT 'active',      -- active | inactive | invalidated
+  valid_from TEXT NOT NULL,                   -- when this became true
+  valid_to TEXT,                              -- when it stopped being true (null = still valid)
+  superseded_by TEXT,                         -- memory_id that replaced this (for invalidated)
+  semantic_key TEXT,                          -- for fact contradiction detection (e.g., db.engine)
   user_id TEXT NOT NULL DEFAULT 'local',
-  assistant_id TEXT NOT NULL DEFAULT 'squirrel',
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  deleted_at TEXT
-);
-
--- team memories table (group DB: group.db) - paid tier
-CREATE TABLE team_memories (
-  id TEXT PRIMARY KEY,
-  content_hash TEXT NOT NULL UNIQUE,
-  content TEXT NOT NULL,
-  memory_type TEXT NOT NULL,        -- team_style | team_profile | team_process | shared_pitfall | shared_recipe | shared_fact
-  repo TEXT NOT NULL,               -- repo path OR 'global'
-  embedding BLOB,                   -- 1536-dim float32
-  confidence REAL NOT NULL,
-  importance TEXT NOT NULL DEFAULT 'medium',
-  state TEXT NOT NULL DEFAULT 'active',
-  team_id TEXT NOT NULL,            -- team identifier
-  contributed_by TEXT NOT NULL,     -- user who shared this
-  source_memory_id TEXT,            -- original individual memory ID (if promoted)
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  deleted_at TEXT
+  updated_at TEXT NOT NULL
 );
 
 -- events table
@@ -263,6 +316,52 @@ CREATE TABLE memory_access_log (
 );
 ```
 
+### A1.1 Memory Lifecycle (Forget Mechanism)
+
+**Status values:**
+- `active` - Normal, appears in retrieval
+- `inactive` - Soft deleted by user (`sqrl forget`), recoverable, hidden from retrieval
+- `invalidated` - Superseded by newer fact, keeps history, hidden from retrieval
+
+**Validity fields (for fact/profile):**
+- `valid_from` - When this became true (default: created_at)
+- `valid_to` - When it stopped being true (null = still valid)
+- `superseded_by` - ID of memory that replaced this
+
+**Retrieval filter:**
+```sql
+WHERE status = 'active'
+  AND (valid_to IS NULL OR valid_to > datetime('now'))
+```
+
+**Contradiction detection (during ingestion):**
+
+For facts with `semantic_key`:
+```
+semantic_key examples: db.engine, db.version, api.framework,
+                       auth.method, package_manager, orm
+```
+- Same key + different value → invalidate old (status='invalidated', valid_to=now, superseded_by=new_id)
+- LLM extracts semantic_key when possible during ingestion
+
+For free-text facts without clear key:
+- LLM judges semantic conflict between new fact and similar existing facts
+- High confidence conflict → invalidate old
+- Low confidence → keep both, let retrieval handle via recency weighting
+
+**No cascade delete:**
+- Invalidating a fact does NOT delete related lessons
+- Related lessons get flagged in retrieval output: `dependency_changed: true`
+
+**CLI behavior:**
+- `sqrl forget <id>` → status='inactive' (soft delete, recoverable)
+- `sqrl forget "deprecated API"` → search + confirm + soft delete matching memories
+
+**v1 limitations (documented for users):**
+- No TTL/auto-expiration (manual forget only)
+- No hard delete/purge (data remains in SQLite file)
+- Free-text contradiction detection depends on LLM, may have false positives
+
 ### A2. Event model (`events.rs`)
 
 Event struct (normalized, CLI-agnostic):
@@ -280,19 +379,19 @@ Paths:
 - `<repo>/.sqrl/` (project)
 
 Files:
-- `squirrel.db` - individual memories (free)
-- `group.db` - team memories (paid, synced)
+- `squirrel.db` - memories
 - `config.toml` - settings
 
 Config fields:
+- agents.claude_code, agents.codex_cli, agents.gemini_cli, agents.cursor (CLI selection)
 - llm.provider, llm.api_key, llm.base_url
 - llm.strong_model, llm.fast_model (2-tier design)
 - embedding.provider, embedding.model (default: openai/text-embedding-3-small)
 - daemon.idle_timeout_hours (default: 2)
 - daemon.socket_path
-- team.enabled, team.team_id (paid tier)
-- team.sync_mode (cloud | self-hosted | local)
-- team.sync_url (for self-hosted)
+
+Projects registry (`~/.sqrl/projects.json`):
+- List of initialized project paths for `sqrl sync`
 
 ---
 
@@ -418,31 +517,52 @@ class SquirrelAgent:
 
 ### C3. Episode Ingestion (via ingest_episode tool)
 
-LLM analyzes entire Episode in ONE call:
-1. Segment into Tasks (user goals)
-2. Classify each: SUCCESS | FAILURE | UNCERTAIN
-3. Extract memories based on outcome:
-   - SUCCESS → recipe or project_fact
-   - FAILURE → pitfall
-   - UNCERTAIN → skip
+LLM analyzes entire Episode in ONE call (segment-first approach):
 
-Near-duplicate check before ADD (0.9 similarity threshold).
+1. **Segment by kind** (not by success/failure):
+   - EXECUTION_TASK - coding, fixing, running commands
+   - PLANNING_DECISION - architecture, design choices
+   - RESEARCH_LEARNING - learning, exploring docs
+   - DISCUSSION - brainstorming, chat
+
+2. **For EXECUTION_TASK segments only**, classify outcome:
+   - SUCCESS (with evidence: tests passed, user confirmed, etc.)
+   - FAILURE (with evidence: error persists, user says "didn't work")
+   - UNCERTAIN (no clear evidence - conservative default)
+
+3. **Extract memories based on segment kind:**
+   - EXECUTION_TASK → lesson (with outcome), fact (knowledge discovered)
+   - PLANNING_DECISION → fact (decisions), lesson (rationale for rejected options), profile
+   - RESEARCH_LEARNING → fact (knowledge), lesson (key learnings)
+   - DISCUSSION → profile (user preferences), lesson (insights)
+
+4. **Contradiction check for facts:**
+   - Extract semantic_key if possible (db.engine, api.framework, etc.)
+   - Check existing facts with same key → invalidate old if conflict
+   - Free-text facts → LLM judges semantic conflict
+
+5. **Near-duplicate check** before ADD (0.9 similarity threshold)
 
 UUID→integer mapping when showing existing memories to LLM (prevents hallucination).
 
 ### C4. Schemas (`schemas/`)
 
-Memory schema (individual):
+Memory schema:
 - id, content_hash, content, memory_type, repo, embedding
-- confidence, importance, state, user_id, assistant_id
-- created_at, updated_at, deleted_at
-- memory_type: user_style | user_profile | process | pitfall | recipe | project_fact
+- outcome (for lesson), fact_type (for fact), scope
+- confidence, importance, user_id
+- created_at, updated_at
+- memory_type: lesson | fact | profile
+- outcome (lesson only): success | failure
+- fact_type (fact only): knowledge | process
+- scope: global | project
 
-TeamMemory schema (group, paid):
-- id, content_hash, content, memory_type, repo, embedding
-- confidence, importance, state, team_id, contributed_by, source_memory_id
-- created_at, updated_at, deleted_at
-- memory_type: team_style | team_profile | team_process | shared_pitfall | shared_recipe | shared_fact
+Lifecycle fields:
+- status: active | inactive | invalidated
+- valid_from: timestamp (when this became true)
+- valid_to: timestamp | null (when it stopped being true)
+- superseded_by: memory_id | null (for invalidated facts)
+- semantic_key: string | null (for fact contradiction detection)
 
 UserProfile schema:
 - key, value, source (explicit|inferred), confidence, updated_at
@@ -455,23 +575,20 @@ UserProfile schema:
 
 **ingest_episode(events):** LLM analysis, task segmentation, outcome classification, memory extraction
 
-**search_memories(query, filters):** Embed query, sqlite-vec search, return ranked results (searches both individual and team DBs)
+**search_memories(query, filters):** Embed query, sqlite-vec search, return ranked results
 
 **get_task_context(task, budget):**
-1. Vector search retrieves top 20 candidates (from both individual and team DBs)
+1. Vector search retrieves top 20 candidates
 2. LLM (fast_model) reranks + composes context prompt:
    - Selects relevant memories
-   - Resolves conflicts (team memories may override individual)
+   - Resolves conflicts between memories
    - Merges related memories
    - Generates structured prompt with memory IDs
 3. Returns ready-to-inject context prompt within token budget
 
-**forget_memory(id):** Soft-delete (set state='deleted')
-
-**share_memory(id, target_type):** Promote individual memory to team DB (manual, opt-in)
-- Copy memory from squirrel.db to group.db
-- Set contributed_by, source_memory_id
-- Optional type conversion (e.g., pitfall → shared_pitfall)
+**forget_memory(id_or_query):**
+- If ID: set status='inactive' (soft delete, recoverable)
+- If natural language query: search → confirm with user → soft delete matches
 
 **export_memories(filters, format):** Export memories as JSON for sharing/backup
 
@@ -490,21 +607,72 @@ UserProfile schema:
 **init_project(path, skip_history):**
 1. Create `<path>/.sqrl/squirrel.db`
 2. If not skip_history: scan_project_logs → ingest
-3. find_cli_configs → offer to set_mcp_config
+3. For each enabled CLI in `config.agents`:
+   - Configure MCP (add Squirrel server to CLI's MCP config)
+   - Inject instruction text to agent file (CLAUDE.md, AGENTS.md, GEMINI.md, .cursor/rules/)
+4. Register project in `~/.sqrl/projects.json`
+
+**sync_projects():**
+1. Read enabled CLIs from `config.agents`
+2. For each project in `~/.sqrl/projects.json`:
+   - For each enabled CLI not yet configured in that project:
+     - Configure MCP
+     - Inject instruction text
 
 **get_mcp_config(cli), set_mcp_config(cli, server, config):** Read/write MCP config files
 
+**get_agent_instructions(cli), set_agent_instructions(cli, content):** Read/write agent instruction files
+
 **get_user_profile(), set_user_profile(key, value):** Manage user_profile table
 
-### D3.1 Team Tools (`tools/team.py`) - Paid Tier
+### D3.1 MCP Config Locations
 
-**team_join(team_id):** Join a team, enable sync
+| CLI | MCP Config Location |
+|-----|---------------------|
+| Claude Code | `~/.claude.json` or `<project>/.mcp.json` |
+| Codex CLI | `codex mcp add-server` command |
+| Gemini CLI | `<project>/.gemini/settings.json` |
+| Cursor | `~/.cursor/mcp.json` or `<project>/.cursor/mcp.json` |
 
-**team_create(name):** Create new team, get team_id
+MCP server definition:
+```json
+{
+  "mcpServers": {
+    "squirrel": {
+      "command": "sqrl-daemon",
+      "args": ["--mcp"],
+      "disabled": false
+    }
+  }
+}
+```
 
-**team_sync():** Force sync with cloud/self-hosted server
+### D3.2 Agent Instruction Files
 
-**team_leave():** Leave team, keep local copies of team memories
+| CLI | Instruction File |
+|-----|------------------|
+| Claude Code | `<project>/CLAUDE.md` |
+| Codex CLI | `<project>/AGENTS.md` |
+| Gemini CLI | `<project>/GEMINI.md` |
+| Cursor | `<project>/.cursor/rules/squirrel.mdc` |
+
+Instruction text to inject:
+```markdown
+## Squirrel Memory System
+
+This project uses Squirrel for persistent memory across sessions.
+
+ALWAYS call `squirrel_get_task_context` BEFORE:
+- Fixing bugs (to check if this bug was seen before)
+- Refactoring code (to get patterns that worked/failed)
+- Adding features touching existing modules
+- Debugging errors that seem familiar
+
+DO NOT call for:
+- Simple typo fixes
+- Adding comments
+- Formatting changes
+```
 
 ### D4. DB Tools (`tools/db.py`)
 
@@ -577,15 +745,11 @@ fn main() {
 Supports both natural language and direct commands:
 - `sqrl "setup this project"` → agent interprets
 - `sqrl init --skip-history` → agent interprets
+- `sqrl config` → interactive CLI selection
+- `sqrl sync` → update all projects with new CLI configs
 - `sqrl update` → auto-update via axoupdater
-
-Team commands (paid tier):
-- `sqrl share <id>` → promote individual memory to team
 - `sqrl export <type>` → export memories as JSON
 - `sqrl import <file>` → import memories
-- `sqrl team join <team-id>` → join team
-- `sqrl team create <name>` → create team
-- `sqrl team sync` → force sync
 
 ---
 
@@ -660,36 +824,147 @@ Windows note: MSI recommended over raw .exe to reduce SmartScreen/AV friction.
 
 ## v1 Scope
 
-**Individual Features (Free):**
 - Passive log watching (4 CLIs)
-- Success detection (SUCCESS/FAILURE/UNCERTAIN)
+- Episode segmentation (EXECUTION_TASK / PLANNING_DECISION / RESEARCH_LEARNING / DISCUSSION)
+- Success detection for EXECUTION_TASK only (SUCCESS/FAILURE/UNCERTAIN with evidence)
 - Unified Python agent with tools
 - Natural language CLI
 - MCP integration (2 tools)
 - Lazy daemon (start on demand, stop after 2hr idle)
 - Retroactive log ingestion on init (token-limited)
-- 6 memory types (user_style, user_profile, process, pitfall, recipe, project_fact)
+- 3 memory types (lesson, fact, profile) with scope flag
+- Memory lifecycle: status (active/inactive/invalidated) + validity (valid_from/valid_to)
+- Fact contradiction detection (semantic_key + LLM for free-text)
+- Soft delete (`sqrl forget`) - no hard purge
 - Near-duplicate deduplication (0.9 threshold)
 - Cross-platform (Mac, Linux, Windows)
 - Export/import memories (JSON)
 - Auto-update (`sqrl update`)
 - Memory consolidation
 - Retrieval debugging tools
+- CLI selection (`sqrl config`) + MCP wiring + agent instruction injection
+- `sqrl sync` for updating existing projects with new CLIs
 
-**Team Features (Paid):**
-- Cloud sync for group.db
-- Team memory types (team_style, team_profile, shared_*, team_process)
-- `sqrl share` command (promote individual to team)
-- Team management (create, join, sync)
-- Self-hosted option for enterprise
+**v1 limitations:**
+- No TTL/auto-expiration (manual forget only)
+- No hard delete (soft delete only, data remains in SQLite)
+- Free-text contradiction detection may have false positives
 
 ## v2 Scope (Future)
 
-- Hooks output for Claude Code / Gemini CLI
-- File injection for AGENTS.md / GEMINI.md
+- Team/cloud sync (group.db, share command, team management)
+- Deep CLI integrations (Claude Code hooks, Cursor extension)
 - Team analytics dashboard
-- Memory marketplace (export/sell recipe packs)
-- Web dashboard
+- Memory marketplace
+- TTL / temporary memory (auto-expiration)
+- Hard purge for privacy/compliance
+- Memory linking + evolution (A-MEM style)
+- Richer conflict detection with schema/key registry
+- `get_memory_history` API for debugging invalidation chains
+
+---
+
+## v2 Architecture: Team/Cloud
+
+### Overview
+
+v2 adds team memory sharing via `group.db` - a separate database that syncs with cloud. Individual memories stay in `squirrel.db` (local-only), team memories go to `group.db` (synced).
+
+### 3-Layer Database Architecture (v2)
+
+| Layer | DB File | Contents | Sync |
+|-------|---------|----------|------|
+| **Global** | `~/.sqrl/squirrel.db` | lesson, fact, profile (scope=global) | Local only |
+| **Project** | `<repo>/.sqrl/squirrel.db` | lesson, fact (scope=project) | Local only |
+| **Team** | `~/.sqrl/group.db` + `<repo>/.sqrl/group.db` | Shared memories (owner=team) | Cloud |
+
+### Memory Schema (v2)
+
+Additional fields for team support:
+
+```sql
+CREATE TABLE memories (
+  -- ... all v1 fields ...
+  owner TEXT NOT NULL DEFAULT 'individual',  -- individual | team
+  team_id TEXT,                              -- team identifier (for owner=team)
+  contributed_by TEXT,                       -- user who shared (for owner=team)
+  source_memory_id TEXT                      -- original memory ID (if promoted to team)
+);
+```
+
+### Team Tools (v2)
+
+**share_memory(memory_id):** Promote individual memory to team
+1. Read from `squirrel.db`
+2. Copy to `group.db` with `owner: team`
+3. Set `contributed_by`, `source_memory_id`
+4. Sync triggers cloud upload
+
+**team_join(team_id), team_leave():** Team membership management
+
+**team_export(filters):** Export team memories for offline/backup
+
+### Sync Architecture
+
+**Local-first with background sync:**
+- `group.db` is local copy, always available
+- Background process syncs with cloud
+- Users never wait for network
+- Conflict resolution: last-write-wins with vector clocks
+
+**Scaling considerations (from research):**
+- Individual user (6 months): ~6MB (900 memories)
+- Team (10,000 users): ~6GB if full sync - NOT viable
+
+**Hybrid approach for large teams:**
+| Team Size | Strategy |
+|-----------|----------|
+| Small (<100) | Full sync - all team memories in local group.db |
+| Medium (100-1000) | Partial sync - recent + relevant memories locally |
+| Large (1000+) | Cloud-primary - query cloud, cache locally |
+
+**Reference:** Figma, Notion, Linear all use server-first or partial sync. Nobody syncs everything locally at scale.
+
+### Team Commands (v2)
+
+```bash
+sqrl team join <team-id>      # Join team, start syncing group.db
+sqrl team leave               # Leave team, remove group.db
+sqrl share <memory-id>        # Promote individual memory to team
+sqrl share --all              # Share all individual memories to team
+sqrl team export              # Export team memories to local
+```
+
+### Migration Paths
+
+**Local → Cloud (user subscribes):**
+```bash
+sqrl share --all              # Promotes all individual memories to team
+```
+
+**Cloud → Local (team exports):**
+```bash
+sqrl team export --project    # Downloads team memories to local squirrel.db
+```
+
+### Config (v2)
+
+```toml
+# ~/.sqrl/config.toml
+[team]
+id = "abc-team-id"
+sync_interval_seconds = 300   # 5 min background sync
+sync_strategy = "full"        # full | partial | cloud-primary
+```
+
+### Retrieval (v2)
+
+Context retrieval queries BOTH databases:
+1. `squirrel.db` (individual memories)
+2. `group.db` (team memories)
+3. LLM reranks combined results
+
+Team memories get attribution: "From team member Alice"
 
 ---
 

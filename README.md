@@ -1,6 +1,6 @@
 # Squirrel
 
-Local-first memory system for AI coding tools. Learns from your successes AND failures, providing personalized, task-aware context via MCP. Supports individual and team memory layers.
+Local-first memory system for AI coding tools. Learns from your successes AND failures, providing personalized, task-aware context via MCP.
 
 ## What It Does
 
@@ -9,11 +9,16 @@ You code with Claude Code / Codex / Cursor / Gemini CLI
                     ↓
     Squirrel watches logs (100% passive, invisible)
                     ↓
-    LLM analyzes: What succeeded? What failed?
+    LLM segments session by type:
+      EXECUTION_TASK → SUCCESS/FAILURE/UNCERTAIN
+      PLANNING_DECISION → decisions, rationale
+      RESEARCH_LEARNING → knowledge gained
+      DISCUSSION → insights, preferences
                     ↓
-    SUCCESS → recipe/project_fact memories
-    FAILURE → pitfall memories (what NOT to do)
-    ALL → process memories (what happened, exportable)
+    Extracts memories:
+      lesson (what worked/failed)
+      fact (project knowledge)
+      profile (user preferences)
                     ↓
     AI tools call MCP → get personalized context
                     ↓
@@ -70,7 +75,6 @@ You code with Claude Code / Codex / Cursor / Gemini CLI
 | **MCP SDK** | rmcp (official Rust SDK) | modelcontextprotocol/rust-sdk |
 | **Agent Framework** | PydanticAI + LiteLLM | Multi-provider LLM support |
 | **Embeddings** | OpenAI text-embedding-3-small | 1536-dim, API-based |
-| **Cloud Sync** | SQLite Session Extension | Changeset-based sync for team DB |
 | **Build/Release** | dist (cargo-dist) | Generates Homebrew, MSI, installers |
 | **Auto-update** | axoupdater | dist's official updater |
 
@@ -80,13 +84,22 @@ You code with Claude Code / Codex / Cursor / Gemini CLI
 # Install (detects OS automatically)
 curl -sSL https://sqrl.dev/install.sh | sh
 
+# First run: select which CLIs you use
+sqrl config
+# → Select: Claude Code, Codex CLI, Gemini CLI, Cursor
+
+# Initialize a project
+cd ~/my-project
+sqrl init
+# → Configures MCP for selected CLIs
+# → Adds Squirrel instructions to CLAUDE.md, AGENTS.md, etc.
+# → Ingests recent history
+
 # Natural language - just talk to it
-sqrl "setup for this project"
 sqrl "what do you know about auth here"
 sqrl "show my coding style"
 
-# Or direct commands if you prefer
-sqrl init
+# Or direct commands
 sqrl search "database patterns"
 sqrl status
 ```
@@ -129,6 +142,26 @@ Next sqrl command → daemon starts again
 
 No manual daemon management. No system services. Just works.
 
+### CLI Selection (Global)
+
+First run (or `sqrl config`) lets you select which CLIs you use:
+
+```bash
+sqrl config
+# Interactive: select Claude Code, Codex CLI, Gemini CLI, Cursor
+```
+
+```toml
+# ~/.sqrl/config.toml
+[agents]
+claude_code = true
+codex_cli = true
+gemini_cli = false
+cursor = true
+```
+
+Only selected CLIs get configured during `sqrl init`.
+
 ### Project Initialization
 
 ```bash
@@ -137,14 +170,29 @@ sqrl init
 ```
 
 This:
-1. Scans CLI log folders for logs mentioning this project
-2. Ingests recent history (token-limited, small projects get all, large projects get recent)
-3. Creates `.sqrl/squirrel.db` for project memories
-4. Detects which CLIs you use and offers to configure MCP
+1. Creates `.sqrl/squirrel.db` for project memories
+2. Scans CLI log folders for logs mentioning this project
+3. Ingests recent history (token-limited)
+4. For each enabled CLI:
+   - Configures MCP (adds Squirrel server to CLI's MCP config)
+   - Adds instruction text to agent file (CLAUDE.md, AGENTS.md, GEMINI.md, .cursor/rules/)
 
 Skip history ingestion:
 ```bash
 sqrl init --skip-history
+```
+
+### Syncing New CLIs
+
+If you enable a new CLI after initializing projects:
+
+```bash
+# Enable Cursor globally
+sqrl config  # select Cursor
+
+# Update all existing projects
+sqrl sync
+# → Adds MCP config + instructions for Cursor to all registered projects
 ```
 
 ### Passive Learning (Write Path)
@@ -158,13 +206,15 @@ Rust Daemon tails JSONL files → normalized Events
         ↓
 Buffers events, flushes as Episode (4hr window OR 50 events)
         ↓
-Python Agent analyzes Episode:
-  - Segments into Tasks ("fix auth bug", "add endpoint")
-  - Classifies: SUCCESS | FAILURE | UNCERTAIN
-  - Extracts memories:
-      SUCCESS → recipe or project_fact
-      FAILURE → pitfall
-      UNCERTAIN → skip
+Python Agent analyzes Episode (segment-first approach):
+  1. Segments by kind:
+     - EXECUTION_TASK (coding, fixing)
+     - PLANNING_DECISION (architecture, design)
+     - RESEARCH_LEARNING (learning, exploring)
+     - DISCUSSION (brainstorming, chat)
+  2. For EXECUTION_TASK only: SUCCESS | FAILURE | UNCERTAIN
+  3. Extracts memories based on segment kind
+  4. Checks for fact contradictions → invalidates old facts
         ↓
 Near-duplicate check (0.9 threshold) → store or merge
 ```
@@ -208,24 +258,16 @@ sqrl init --skip-history
 sqrl search "postgres"
 sqrl forget <memory-id>
 sqrl config set llm.model claude-sonnet
+sqrl sync                               # Update all projects with new CLI configs
 ```
 
-### Team Commands
+### Export/Import
 
 ```bash
-# Share individual memory to team (manual, opt-in)
-sqrl share <memory-id>              # Promote to team DB
-sqrl share <memory-id> --as pitfall # Share with type conversion
-
-# Export/Import memories
-sqrl export pitfall                 # Export all pitfalls as JSON
-sqrl export recipe --project        # Export project recipes
+# Export/Import memories (for backup or sharing)
+sqrl export lesson                  # Export all lessons as JSON
+sqrl export fact --project          # Export project facts
 sqrl import memories.json           # Import memories
-
-# Team management (paid)
-sqrl team join <team-id>            # Join a team
-sqrl team create "Backend Team"     # Create team
-sqrl team sync                      # Force sync with cloud
 ```
 
 ## MCP Tools
@@ -237,64 +279,95 @@ sqrl team sync                      # Force sync with cloud
 
 ## Memory Types
 
-### Individual Memories (Free)
+3 memory types, each with scope (global/project):
 
-| Type | Scope | Description | Example |
-|------|-------|-------------|---------|
-| `user_style` | Global | Your coding preferences | "Prefers async/await" |
-| `user_profile` | Global | Your info (name, role, skills) | "Backend dev, 5yr Python" |
-| `process` | Project | What happened (exportable) | "Tried X, failed, then Y worked" |
-| `pitfall` | Project | Issues you encountered | "API returns 500 on null user_id" |
-| `recipe` | Project | Patterns that worked for you | "Use repository pattern for DB" |
-| `project_fact` | Project | Project knowledge you learned | "Uses PostgreSQL 15" |
+| Type | Fields | Description | Example |
+|------|--------|-------------|---------|
+| `lesson` | outcome (success/failure), scope | What worked or failed | "async/await preferred", "API 500 on null user_id" |
+| `fact` | fact_type (knowledge/process), scope | Project knowledge or what happened | "Uses PostgreSQL 15", "Tried X, then Y worked" |
+| `profile` | scope | User info | "Backend dev, 5yr Python" |
 
-### Team Memories (Paid - Cloud Sync)
+### Scope
 
-| Type | Scope | Description | Example |
-|------|-------|-------------|---------|
-| `team_style` | Global | Team coding standards | "Team uses ESLint + Prettier" |
-| `team_profile` | Global | Team info | "Backend team, 5 devs" |
-| `team_process` | Project | Shared what-happened logs | "Sprint 12: migrated to Redis" |
-| `shared_pitfall` | Project | Team-wide known issues | "Never use ORM for bulk inserts" |
-| `shared_recipe` | Project | Team-approved patterns | "Use factory pattern for tests" |
-| `shared_fact` | Project | Team project knowledge | "Prod DB is on AWS RDS" |
+| Scope | DB Location | Description |
+|-------|-------------|-------------|
+| Global | `~/.sqrl/squirrel.db` | User preferences, profile (applies to all projects) |
+| Project | `<repo>/.sqrl/squirrel.db` | Project-specific lessons and facts |
+
+### Examples by Type
+
+**lesson (outcome=success):** coding preferences, patterns that worked
+- "Prefers async/await over callbacks"
+- "Use repository pattern for DB access"
+
+**lesson (outcome=failure):** issues encountered, things to avoid
+- "API returns 500 on null user_id"
+- "Never use ORM for bulk inserts"
+
+**fact (fact_type=knowledge):** project facts, tech stack info
+- "Uses PostgreSQL 15"
+- "Auth via JWT tokens"
+
+**fact (fact_type=process):** what happened, decision history
+- "Tried Redis, failed due to memory, switched to PostgreSQL"
+- "Sprint 12: migrated to Redis"
+
+**profile:** user info
+- "Backend dev, 5yr Python experience"
+- "Prefers detailed code comments"
+
+### Memory Lifecycle
+
+Memories have status and validity tracking:
+
+| Status | Description | Retrieval |
+|--------|-------------|-----------|
+| `active` | Normal memory | Included |
+| `inactive` | Soft deleted via `sqrl forget` | Hidden (recoverable) |
+| `invalidated` | Superseded by newer fact | Hidden (keeps history) |
+
+**Fact contradiction handling:**
+- When new fact contradicts old (e.g., "uses PostgreSQL" vs "uses MySQL")
+- Old fact marked `invalidated`, `valid_to` set, `superseded_by` points to new
+- History preserved for debugging
+
+**Forget command:**
+```bash
+sqrl forget <memory-id>              # Soft delete by ID
+sqrl forget "deprecated API"         # Search + confirm + soft delete
+```
 
 ## Storage Layout
 
 ```
 ~/.sqrl/
 ├── config.toml                 # User settings, API keys
-├── squirrel.db                 # Global individual (user_style, user_profile)
-├── group.db                    # Global team (team_style, team_profile) - synced
+├── squirrel.db                 # Global memories (lesson, fact, profile with scope=global)
 └── logs/                       # Daemon logs
 
 <repo>/.sqrl/
-├── squirrel.db                 # Project individual (process, pitfall, recipe, project_fact)
-├── group.db                    # Project team (shared_*, team_process) - synced
+├── squirrel.db                 # Project memories (lesson, fact with scope=project)
 └── config.toml                 # Project overrides (optional)
 ```
 
-### 3-Layer Database Architecture
+### 2-Layer Database Architecture
 
-| Layer | DB File | Contents | Sync |
-|-------|---------|----------|------|
-| **Global Individual** | `~/.sqrl/squirrel.db` | user_style, user_profile | Local only |
-| **Global Team** | `~/.sqrl/group.db` | team_style, team_profile | Cloud (paid) |
-| **Project Individual** | `<repo>/.sqrl/squirrel.db` | process, pitfall, recipe, project_fact | Local only |
-| **Project Team** | `<repo>/.sqrl/group.db` | shared_pitfall, shared_recipe, shared_fact, team_process | Cloud (paid) |
-
-### Team Database Options
-
-| Mode | Location | Use Case |
-|------|----------|----------|
-| **Cloud** (default) | Squirrel Cloud | Teams, auto-sync, paid tier |
-| **Self-hosted** | Your server | Enterprise, data sovereignty |
-| **Local file** | `group.db` file | Offline, manual export/import |
+| Layer | DB File | Contents |
+|-------|---------|----------|
+| **Global** | `~/.sqrl/squirrel.db` | lesson, fact, profile (scope=global) |
+| **Project** | `<repo>/.sqrl/squirrel.db` | lesson, fact (scope=project) |
 
 ## Configuration
 
 ```toml
 # ~/.sqrl/config.toml
+
+[agents]
+claude_code = true                # Enable Claude Code integration
+codex_cli = true                  # Enable Codex CLI integration
+gemini_cli = false                # Enable Gemini CLI integration
+cursor = true                     # Enable Cursor integration
+
 [llm]
 provider = "gemini"               # gemini | openai | anthropic | ollama | ...
 api_key = "..."
@@ -310,12 +383,6 @@ model = "text-embedding-3-small"  # 1536-dim, $0.10/M tokens
 
 [daemon]
 idle_timeout_hours = 2            # Stop after N hours inactive
-
-[team]                            # Paid tier
-enabled = false                   # Enable team features
-team_id = ""                      # Your team ID
-sync_mode = "cloud"               # cloud | self-hosted | local
-sync_url = ""                     # Custom sync URL (self-hosted only)
 ```
 
 ### LLM Usage
@@ -382,30 +449,30 @@ source .venv/bin/activate && pytest
 
 ## v1 Scope
 
-**Individual Features (Free):**
 - Passive log watching (4 CLIs)
-- Success detection (SUCCESS/FAILURE/UNCERTAIN classification)
+- Episode segmentation (EXECUTION_TASK / PLANNING_DECISION / RESEARCH_LEARNING / DISCUSSION)
+- Success detection for EXECUTION_TASK only (with evidence requirement)
+- Memory lifecycle: status (active/inactive/invalidated) + validity tracking
+- Fact contradiction detection + auto-invalidation
+- Soft delete (`sqrl forget`) - recoverable
 - Unified Python agent with tools
 - Natural language CLI
 - MCP integration (2 tools)
 - Lazy daemon (start on demand, stop after 2hr idle)
 - Retroactive log ingestion on init (token-limited)
-- 6 memory types (user_style, user_profile, process, pitfall, recipe, project_fact)
+- 3 memory types (lesson, fact, profile) with scope flag
 - Near-duplicate deduplication (0.9 threshold)
 - Cross-platform (Mac, Linux, Windows)
 - Export/import memories (JSON)
 - Auto-update (`sqrl update`)
-- Memory consolidation
-- Retrieval debugging tools
+- CLI selection + MCP wiring + agent instruction injection
+- `sqrl sync` for updating existing projects with new CLIs
 
-**Team Features (Paid):**
-- Cloud sync for group.db
-- Team memory types (team_style, team_profile, shared_*, team_process)
-- `sqrl share` command (promote individual to team)
-- Team management (create, join, sync)
-- Self-hosted option for enterprise
+**v1 limitations:**
+- No TTL/auto-expiration
+- No hard delete (soft delete only)
 
-**v2:** Hooks output, file injection (AGENTS.md/GEMINI.md), team analytics, memory marketplace
+**v2:** Team/cloud sync, deep CLI integrations, TTL/temporary memory, hard purge, memory linking
 
 ## Contributing
 
