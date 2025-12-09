@@ -75,3 +75,15 @@ Only change what's necessary. No drive-by refactoring. No "while I'm here" impro
 - No emojis in documentation
 - Brief, direct language
 - Tables over paragraphs
+
+## Agent Instruction Files
+
+Single source of truth for AI tool instructions:
+
+| File | Purpose |
+|------|---------|
+| `AGENTS.md` | Canonical source (Codex native) |
+| `.claude/CLAUDE.md` | Symlink → AGENTS.md |
+| `.cursor/rules/*.mdc` | Cursor project rules |
+
+GEMINI.md and .cursorrules are deprecated. Configure Gemini CLI to read AGENTS.md via `contextFileName` setting.
