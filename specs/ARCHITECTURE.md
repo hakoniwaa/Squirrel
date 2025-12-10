@@ -2,6 +2,28 @@
 
 High-level system boundaries and data flow.
 
+## Technology Stack
+
+| Category | Technology | Notes |
+|----------|------------|-------|
+| **Rust Daemon** | | |
+| Storage | SQLite + sqlite-vec | Local-first, vector search |
+| IPC Protocol | JSON-RPC 2.0 | MCP-compatible, over Unix socket |
+| MCP SDK | rmcp | Official Rust SDK (modelcontextprotocol/rust-sdk) |
+| CLI Framework | clap | Rust CLI parsing |
+| Async Runtime | tokio | Async I/O |
+| File Watching | notify | Cross-platform fs events |
+| Logging | tracing | Structured logging |
+| **Python Agent** | | |
+| Agent Framework | PydanticAI | Python agent with tools |
+| LLM Client | LiteLLM | Multi-provider support |
+| Embeddings | OpenAI text-embedding-3-small | 1536-dim, API-based |
+| Logging | structlog | Structured logging |
+| **Build & Release** | | |
+| Rust Build | cargo-dist | Generates Homebrew, MSI, installers |
+| Auto-update | axoupdater | dist's official updater |
+| Python Packaging | PyInstaller | Bundled, zero user deps |
+
 ## System Overview
 
 ```

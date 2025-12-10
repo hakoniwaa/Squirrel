@@ -241,3 +241,44 @@ Use Unix socket at `/tmp/sqrl_agent.sock` with JSON-RPC 2.0 protocol. Windows us
 | Team sync backend | Supabase / Custom / None | v2 |
 | Local LLM support | Ollama / llama.cpp / None | v2 |
 | Web UI | None / Tauri / Electron | v2 |
+
+---
+
+## Future: v2 Team/Cloud Architecture
+
+Reference architecture for team memory sharing (not in v1 scope).
+
+### 3-Layer Database Architecture
+
+| Layer | DB File | Contents | Sync |
+|-------|---------|----------|------|
+| Global | `~/.sqrl/squirrel.db` | lesson, fact, profile (scope=global) | Local only |
+| Project | `<repo>/.sqrl/squirrel.db` | lesson, fact (scope=project) | Local only |
+| Team | `~/.sqrl/group.db` | Shared memories (owner=team) | Cloud |
+
+### Memory Schema Extensions (v2)
+
+```sql
+-- Additional fields for team support
+ALTER TABLE memories ADD COLUMN owner TEXT NOT NULL DEFAULT 'individual';  -- individual | team
+ALTER TABLE memories ADD COLUMN team_id TEXT;                              -- team identifier
+ALTER TABLE memories ADD COLUMN contributed_by TEXT;                       -- user who shared
+ALTER TABLE memories ADD COLUMN source_memory_id TEXT;                     -- original memory ID
+```
+
+### Scaling Strategy
+
+| Team Size | Strategy |
+|-----------|----------|
+| Small (<100) | Full sync - all team memories in local group.db |
+| Medium (100-1000) | Partial sync - recent + relevant memories locally |
+| Large (1000+) | Cloud-primary - query cloud, cache locally |
+
+### Team Commands (v2)
+
+```bash
+sqrl team join <team-id>      # Join team, start syncing group.db
+sqrl team leave               # Leave team, remove group.db
+sqrl share <memory-id>        # Promote individual memory to team
+sqrl team export              # Export team memories to local
+```
