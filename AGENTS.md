@@ -50,7 +50,18 @@ Follow these phases in order. Never skip phases. Never jump to code without a sp
 
 ### Before Every Commit (MANDATORY)
 
-Verify these before committing:
+A pre-commit hook (`.githooks/pre-commit`) will show you which files changed.
+
+**Your job:** Review the list and decide which docs need updates.
+
+| Files Changed | Check These Docs |
+|---------------|------------------|
+| `*.rs` (Rust) | `specs/ARCHITECTURE.md`, `specs/INTERFACES.md`, `specs/SCHEMAS.md` |
+| `*.py` (Python) | `specs/ARCHITECTURE.md`, `specs/PROMPTS.md` |
+| `specs/*.md` | Related code that implements the spec |
+| `*.toml`, `*.nix` | `specs/DECISIONS.md` (if config change is significant) |
+
+**Checklist:**
 
 | Check | Action if Yes |
 |-------|---------------|

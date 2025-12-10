@@ -1,0 +1,62 @@
+#!/bin/bash
+# Pre-commit hook: Reminds AI to check if related docs need updates
+#
+# This hook does NOT block commits. It only outputs a reminder.
+# The AI must decide which docs are related and whether to update them.
+
+# Get staged files (files in this commit)
+STAGED=$(git diff --cached --name-only)
+
+if [ -z "$STAGED" ]; then
+    exit 0
+fi
+
+# Check if code files changed
+CODE_CHANGED=$(echo "$STAGED" | grep -E '\.(rs|py|toml|nix)$' || true)
+
+# Check if spec files changed
+SPECS_CHANGED=$(echo "$STAGED" | grep -E '^specs/' || true)
+
+# Check if doc files changed
+DOCS_CHANGED=$(echo "$STAGED" | grep -E '\.(md|mdc)$' || true)
+
+# Output reminder
+echo ""
+echo "=========================================="
+echo "PRE-COMMIT: Doc Sync Check"
+echo "=========================================="
+echo ""
+echo "Files in this commit:"
+echo "$STAGED" | sed 's/^/  - /'
+echo ""
+
+if [ -n "$CODE_CHANGED" ]; then
+    echo "Code files changed:"
+    echo "$CODE_CHANGED" | sed 's/^/  - /'
+    echo ""
+    echo ">> Check if any specs/*.md need updates"
+    echo ""
+fi
+
+if [ -n "$SPECS_CHANGED" ]; then
+    echo "Spec files changed:"
+    echo "$SPECS_CHANGED" | sed 's/^/  - /'
+    echo ""
+    echo ">> Check if related code needs updates"
+    echo ""
+fi
+
+if [ -n "$DOCS_CHANGED" ] && [ -z "$SPECS_CHANGED" ]; then
+    echo "Doc files changed:"
+    echo "$DOCS_CHANGED" | sed 's/^/  - /'
+    echo ""
+fi
+
+echo "=========================================="
+echo "If docs are in sync, proceed with commit."
+echo "=========================================="
+echo ""
+
+# Always allow commit (exit 0)
+# AI decides whether to abort and fix docs
+exit 0
