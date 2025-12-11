@@ -1,6 +1,14 @@
-# Squirrel Declarative Keys
+# Squirrel Key Conventions
 
-Registry of declarative keys for facts. Same key + different value triggers deterministic invalidation (no LLM needed).
+Non-binding suggestions for declarative keys. Memory Writer may use these or define new ones.
+
+## Purpose
+
+Keys enable fast deterministic lookup and conflict resolution:
+- Same key + different value → UPDATE operation (Memory Writer decides)
+- Fast path retrieval without embedding search
+
+**Note:** This is a convention registry, not a rule engine. Memory Writer is free to use any keys it deems appropriate.
 
 ## Key Format
 
@@ -9,101 +17,123 @@ Registry of declarative keys for facts. Same key + different value triggers dete
 ```
 
 - **scope**: `project` or `user`
-- **category**: domain grouping (db, api, language, etc.)
+- **category**: domain grouping (db, api, http, pref, etc.)
 - **property**: specific attribute
 
-## Project-Scoped Keys (KEY-P-*)
+---
 
-Stored with `project_id` set. Authoritative for project environment.
+## Recommended Invariant Keys (project.*)
 
-| ID | Key | Description | Example Values |
-|----|-----|-------------|----------------|
-| KEY-P-001 | `project.db.engine` | Database engine | PostgreSQL, MySQL, SQLite, MongoDB |
-| KEY-P-002 | `project.db.version` | Database version | 15, 8.0, 3.x |
-| KEY-P-003 | `project.db.orm` | ORM/query builder | Prisma, SQLAlchemy, TypeORM, Diesel |
-| KEY-P-004 | `project.api.framework` | API framework | FastAPI, Express, Rails, Actix |
-| KEY-P-005 | `project.ui.framework` | UI framework | React, Vue, Svelte, None |
-| KEY-P-006 | `project.language.main` | Primary language | Python, TypeScript, Rust, Go |
-| KEY-P-007 | `project.language.version` | Language version | 3.12, 5.0, 1.75 |
-| KEY-P-008 | `project.test.framework` | Test framework | pytest, jest, cargo test |
-| KEY-P-009 | `project.test.command` | Test run command | `pytest`, `npm test`, `cargo test` |
-| KEY-P-010 | `project.build.command` | Build command | `npm run build`, `cargo build` |
-| KEY-P-011 | `project.auth.method` | Auth mechanism | JWT, session, OAuth, API key |
-| KEY-P-012 | `project.package_manager` | Package manager | npm, pnpm, yarn, pip, uv, cargo |
-| KEY-P-013 | `project.deploy.platform` | Deploy target | Vercel, AWS, Railway, self-hosted |
-| KEY-P-014 | `project.ci.platform` | CI system | GitHub Actions, GitLab CI, CircleCI |
+For kind='invariant' memories. Stored with project_id set.
 
-## User-Scoped Keys (KEY-U-*)
+| Key | Description | Example Values |
+|-----|-------------|----------------|
+| `project.db.engine` | Database engine | PostgreSQL, MySQL, SQLite, MongoDB |
+| `project.db.version` | Database version | 15, 8.0, 3.x |
+| `project.db.orm` | ORM/query builder | Prisma, SQLAlchemy, TypeORM, Diesel |
+| `project.api.framework` | API framework | FastAPI, Express, Rails, Actix |
+| `project.ui.framework` | UI framework | React, Vue, Svelte, None |
+| `project.language.main` | Primary language | Python, TypeScript, Rust, Go |
+| `project.language.version` | Language version | 3.12, 5.0, 1.75 |
+| `project.test.framework` | Test framework | pytest, jest, cargo test |
+| `project.test.command` | Test run command | `pytest`, `npm test`, `cargo test` |
+| `project.build.command` | Build command | `npm run build`, `cargo build` |
+| `project.auth.method` | Auth mechanism | JWT, session, OAuth, API key |
+| `project.package_manager` | Package manager | npm, pnpm, yarn, pip, uv, cargo |
+| `project.deploy.platform` | Deploy target | Vercel, AWS, Railway, self-hosted |
+| `project.ci.platform` | CI system | GitHub Actions, GitLab CI, CircleCI |
+| `project.http.client` | HTTP client library | httpx, requests, axios, reqwest |
 
-Stored with `project_id = NULL` in global db. Stable user preferences.
+---
 
-| ID | Key | Description | Example Values |
-|----|-----|-------------|----------------|
-| KEY-U-001 | `user.preferred_style` | Coding style | async_await, callbacks, sync |
-| KEY-U-002 | `user.preferred_language` | Favorite language | Python, TypeScript, Rust |
-| KEY-U-003 | `user.strict_null_checks` | Null handling | true, false |
-| KEY-U-004 | `user.comment_style` | Comment preference | minimal, detailed, jsdoc |
-| KEY-U-005 | `user.error_handling` | Error pattern | exceptions, result_types, errors |
-| KEY-U-006 | `user.test_style` | Testing approach | tdd, after_impl, minimal |
-| KEY-U-007 | `user.naming_convention` | Naming style | snake_case, camelCase |
+## Recommended Preference Keys (user.*)
 
-## Promotion Rules
+For kind='preference' memories. Stored with project_id=NULL in global db.
 
-User preferences (`user.*` keys) require evidence before becoming keyed facts:
+| Key | Description | Example Values |
+|-----|-------------|----------------|
+| `user.pref.async_style` | Async pattern preference | async_await, callbacks, sync |
+| `user.pref.language` | Favorite language | Python, TypeScript, Rust |
+| `user.pref.null_handling` | Null handling style | strict, permissive |
+| `user.pref.comment_style` | Comment preference | minimal, detailed, jsdoc |
+| `user.pref.error_handling` | Error pattern | exceptions, result_types, errors |
+| `user.pref.test_style` | Testing approach | tdd, after_impl, minimal |
+| `user.pref.naming_convention` | Naming style | snake_case, camelCase |
+| `user.pref.explanation_style` | Explanation verbosity | concise, detailed, step_by_step |
+| `user.pref.ask_when_uncertain` | Confirmation preference | always, sometimes, never |
 
-| Rule | Threshold |
-|------|-----------|
-| Minimum success signals | 3 |
-| Recency window | 7 days |
-| Confidence threshold | 0.8 |
+---
 
-Until promotion threshold is met, observations are stored as unkeyed facts with `evidence_source` tracking.
+## Key Uniqueness Convention
 
-## Conflict Resolution
+For any `(project_id, owner_type, owner_id, key)` tuple:
+- At most one active invariant/preference is expected at a time
+- When Memory Writer decides to change a keyed memory, it should output an UPDATE op
+- Commit layer marks previous memories with same key as status='deprecated'
 
-### Keyed Facts (Deterministic)
-
+**Example:**
 ```
-IF new_fact.key == existing_fact.key
-   AND new_fact.value != existing_fact.value:
+Existing: project.http.client = "requests"
+New info: httpx works better
 
-   existing_fact.status = 'invalidated'
-   existing_fact.valid_to = now()
-   existing_fact.superseded_by = new_fact.id
+Memory Writer outputs:
+{
+  "op": "UPDATE",
+  "target_memory_id": "mem-old-123",
+  "key": "project.http.client",
+  "text": "The standard HTTP client is httpx.",
+  ...
+}
+
+Commit layer:
+1. Mark mem-old-123 as status='deprecated'
+2. Insert new memory with key="project.http.client"
 ```
 
-No LLM judgment needed. Pure key-value match.
-
-### Unkeyed Facts (LLM-Assisted)
-
-For facts without declarative keys, LLM judges semantic conflict:
-
-1. Vector search for similar existing facts (top 5)
-2. If similarity > 0.85, LLM evaluates conflict
-3. High confidence conflict → invalidate old
-4. Low confidence → keep both, recency weighted in retrieval
+---
 
 ## Fast Path Retrieval
 
-Keyed facts support direct lookup without embeddings:
+Keyed memories support direct lookup without embedding search:
 
 ```sql
 SELECT * FROM memories
-WHERE key = 'project.db.engine'
+WHERE key = 'project.http.client'
   AND project_id = ?
-  AND status = 'active'
+  AND owner_type = ?
+  AND owner_id = ?
+  AND status IN ('provisional', 'active')
+ORDER BY created_at DESC
+LIMIT 1
 ```
 
 Use this for environment queries before falling back to vector search.
 
-## Access Logging
+---
 
-All keyed fact lookups logged with `access_type = 'key_lookup'`:
+## Deprecated Sections
 
-```json
-{
-    "key": "project.db.engine",
-    "value": "PostgreSQL",
-    "hit": true
-}
-```
+The following sections from the old KEYS.md are no longer applicable:
+
+| Old Section | Status |
+|-------------|--------|
+| Promotion Rules | Removed - CR-Memory handles promotion via memory_policy.toml |
+| Conflict Resolution Rules | Removed - Memory Writer handles conflicts |
+| KEY-P-* / KEY-U-* IDs | Removed - Keys are suggestions, not enforced registry |
+
+---
+
+## Adding New Keys
+
+Memory Writer is free to create new keys. Recommended conventions:
+
+| Pattern | Use For |
+|---------|---------|
+| `project.<domain>.<property>` | Project-scoped invariants |
+| `user.pref.<property>` | User preferences |
+| `user.style.<property>` | Coding style preferences |
+
+When creating new keys:
+- Use lowercase with underscores for multi-word properties
+- Be specific enough to avoid collisions
+- Be general enough to be reusable

@@ -1,5 +1,6 @@
-# Ignore everything
-*
-# Except .gitignore and markdown files
+# Ignore all cloned repos (local learning only)
+*/
+
+# Keep only analysis files
 !.gitignore
 !*.md

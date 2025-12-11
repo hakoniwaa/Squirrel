@@ -112,7 +112,7 @@ Use two model tiers:
 
 ## ADR-005: Declarative Keys for Facts
 
-**Status:** accepted
+**Status:** superseded by ADR-010
 **Date:** 2024-11-23
 
 **Context:**
@@ -183,7 +183,7 @@ Adopt spec-driven development. All behavior defined in specs/ before implementat
 
 ## ADR-008: Frustration Detection for Memory Importance
 
-**Status:** accepted
+**Status:** superseded by ADR-010
 **Date:** 2024-11-23
 
 **Context:**
@@ -234,6 +234,59 @@ Use Unix socket at `/tmp/sqrl_agent.sock` with JSON-RPC 2.0 protocol. Windows us
 
 ---
 
+## ADR-010: AI-Primary Memory Architecture (v1 Redesign)
+
+**Status:** accepted
+**Date:** 2024-12-11
+
+**Context:**
+The original memory architecture (lesson/fact/profile types, PROMPT-001-A/B two-stage extraction, importance/support_count heuristics, frustration-based importance boosting) was too rigid and rule-based. Problems:
+
+- LLM filling forms instead of deciding
+- 20+ field schema with redundant columns
+- Importance derived from frustration heuristics, not actual future value
+- Two-stage LLM pipeline (extractor + manager) was complex
+- No way to measure if memories actually helped in future sessions
+
+After studying reference implementations (claude-mem, mcp-memory-service, langmem) and iterating on design with GPT collaboration, a new architecture was developed.
+
+**Decision:**
+Adopt AI-primary, future-impact, declarative memory architecture:
+
+| Principle | Old | New |
+|-----------|-----|-----|
+| Memory creation | LLM fills structured form | LLM decides what/how/where |
+| Value signal | frustration → importance | future opportunities/uses → promotion |
+| Pipeline | 2-stage (extract + manage) | 1-stage (Memory Writer) |
+| Retention | support_count + time decay | CR-Memory opportunity-based evaluation |
+| Schema | 20+ fields, rigid types | Minimal fields, flexible kinds |
+
+**Key Changes:**
+
+1. **New Memory Kinds**: Replace lesson/fact/profile with preference, invariant, pattern, guard, note
+2. **New Tiers**: short_term, long_term, emergency (guards affect tool execution)
+3. **Status Lifecycle**: provisional → active → deprecated (based on CR-Memory evaluation)
+4. **Memory Writer**: Single strong-model LLM call per episode, outputs ops array
+5. **CR-Memory**: Background job promoting/deprecating based on use_count, opportunities, regret_hits
+6. **Policy-driven**: memory_policy.toml declares thresholds, LLM + CR-Memory implement behavior
+7. **Guard Interception**: Structured guard_pattern enables hot-path tool blocking (no LLM)
+
+**Supersedes:**
+- ADR-005: Declarative keys still exist but LLM decides when to use them
+- ADR-008: Frustration stored in evidence table but doesn't determine importance
+
+**Consequences:**
+- (+) LLM uses judgment instead of filling forms
+- (+) Memories prove value through actual usage, not heuristics
+- (+) Simpler schema, fewer fields to maintain
+- (+) Guards can block dangerous tool calls without LLM latency
+- (+) Declarative policy allows tuning without code changes
+- (-) CR-Memory requires enough opportunities before promotion (cold start)
+- (-) estimated_regret_saved is heuristic (v1), not causal
+- (-) Need to migrate existing memories from old schema
+
+---
+
 ## Pending Decisions
 
 | Topic | Options | Blocking |
@@ -246,39 +299,29 @@ Use Unix socket at `/tmp/sqrl_agent.sock` with JSON-RPC 2.0 protocol. Windows us
 
 ## Future: v2 Team/Cloud Architecture
 
-Reference architecture for team memory sharing (not in v1 scope).
+Reference architecture for team memory sharing (not in v1 scope). See V1_ARCHITECTURE_REDESIGN.md section 6 for details.
 
-### 3-Layer Database Architecture
+### Database Architecture (v2)
 
-| Layer | DB File | Contents | Sync |
-|-------|---------|----------|------|
-| Global | `~/.sqrl/squirrel.db` | lesson, fact, profile (scope=global) | Local only |
-| Project | `<repo>/.sqrl/squirrel.db` | lesson, fact (scope=project) | Local only |
-| Team | `~/.sqrl/group.db` | Shared memories (owner=team) | Cloud |
+| Layer | Scope | Owner | Storage |
+|-------|-------|-------|---------|
+| Local | global, project | user | `~/.sqrl/squirrel.db`, `<repo>/.sqrl/squirrel.db` |
+| Cloud | global, project | team, org | Cloud service (multi-tenant) |
 
-### Memory Schema Extensions (v2)
+v1 schema already includes `owner_type` (user/team/org) and `owner_id` fields.
 
-```sql
--- Additional fields for team support
-ALTER TABLE memories ADD COLUMN owner TEXT NOT NULL DEFAULT 'individual';  -- individual | team
-ALTER TABLE memories ADD COLUMN team_id TEXT;                              -- team identifier
-ALTER TABLE memories ADD COLUMN contributed_by TEXT;                       -- user who shared
-ALTER TABLE memories ADD COLUMN source_memory_id TEXT;                     -- original memory ID
-```
+### Multi-CLI / Multi-IDE (v2)
 
-### Scaling Strategy
-
-| Team Size | Strategy |
-|-----------|----------|
-| Small (<100) | Full sync - all team memories in local group.db |
-| Medium (100-1000) | Partial sync - recent + relevant memories locally |
-| Large (1000+) | Cloud-primary - query cloud, cache locally |
+Same memory engine, multiple clients:
+- MCP adapter for Claude Code (existing)
+- VS Code / Cursor / Windsurf / Codex CLI integrations
+- Each integration translates its logs into episodes format
 
 ### Team Commands (v2)
 
 ```bash
-sqrl team join <team-id>      # Join team, start syncing group.db
-sqrl team leave               # Leave team, remove group.db
-sqrl share <memory-id>        # Promote individual memory to team
+sqrl team join <team-id>      # Join team, start syncing
+sqrl team leave               # Leave team
+sqrl share <memory-id>        # Promote user memory to team
 sqrl team export              # Export team memories to local
 ```

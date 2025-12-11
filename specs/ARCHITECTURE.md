@@ -8,14 +8,14 @@ High-level system boundaries and data flow.
 |----------|------------|-------|
 | **Rust Daemon** | | |
 | Storage | SQLite + sqlite-vec | Local-first, vector search |
-| IPC Protocol | JSON-RPC 2.0 | MCP-compatible, over Unix socket |
+| IPC Protocol | JSON-RPC 2.0 | Over Unix socket |
 | MCP SDK | rmcp | Official Rust SDK (modelcontextprotocol/rust-sdk) |
 | CLI Framework | clap | Rust CLI parsing |
 | Async Runtime | tokio | Async I/O |
 | File Watching | notify | Cross-platform fs events |
 | Logging | tracing | Structured logging |
-| **Python Agent** | | |
-| Agent Framework | PydanticAI | Python agent with tools |
+| **Python Memory Service** | | |
+| Agent Framework | PydanticAI | Structured LLM outputs |
 | LLM Client | LiteLLM | Multi-provider support |
 | Embeddings | OpenAI text-embedding-3-small | 1536-dim, API-based |
 | Logging | structlog | Structured logging |
@@ -54,30 +54,40 @@ High-level system boundaries and data flow.
 │  │         │                │                │               │  │
 │  │         └────────────────┼────────────────┘               │  │
 │  │                          ▼                                │  │
-│  │                 ┌─────────────────┐                       │  │
-│  │                 │   IPC Router    │                       │  │
-│  │                 │  (JSON-RPC 2.0) │                       │  │
-│  │                 └────────┬────────┘                       │  │
-│  │                          │                                │  │
-│  │         ┌────────────────┼────────────────┐               │  │
-│  │         ▼                ▼                ▼               │  │
-│  │  ┌───────────┐    ┌───────────┐    ┌───────────┐         │  │
-│  │  │  SQLite   │    │  Events   │    │  Config   │         │  │
-│  │  │  Storage  │    │  Queue    │    │  Manager  │         │  │
-│  │  └───────────┘    └───────────┘    └───────────┘         │  │
-│  └───────────────────────────────────────────────────────────┘  │
-│                              │                                   │
-│                              │ Unix Socket                       │
-│                              ▼                                   │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │                   PYTHON AGENT                             │  │
 │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │  │
-│  │  │  Ingestion  │  │  Retrieval  │  │  Conflict   │        │  │
-│  │  │    Agent    │  │    Agent    │  │  Resolver   │        │  │
-│  │  │ (PydanticAI)│  │ (PydanticAI)│  │ (PydanticAI)│        │  │
-│  │  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘        │  │
+│  │  │   Guard     │  │  Commit     │  │  Retrieval  │        │  │
+│  │  │ Interceptor │  │   Layer     │  │   Engine    │        │  │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘        │  │
 │  │         │                │                │               │  │
 │  │         └────────────────┼────────────────┘               │  │
+│  │                          ▼                                │  │
+│  │                 ┌─────────────────┐                       │  │
+│  │                 │     SQLite      │                       │  │
+│  │                 │  + sqlite-vec   │                       │  │
+│  │                 └─────────────────┘                       │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                              │                                   │
+│                              │ Unix Socket (JSON-RPC 2.0)        │
+│                              ▼                                   │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │               PYTHON MEMORY SERVICE                        │  │
+│  │  ┌─────────────────────────────────────────────────────┐  │  │
+│  │  │                  Memory Writer                       │  │  │
+│  │  │  - ingest_episode (strong model, 1 call/episode)    │  │  │
+│  │  │  - Returns ops[] + episode_evidence                  │  │  │
+│  │  └─────────────────────────────────────────────────────┘  │  │
+│  │  ┌─────────────────────────────────────────────────────┐  │  │
+│  │  │                  Retrieval Module                    │  │  │
+│  │  │  - embed_text (embedding generation)                │  │  │
+│  │  │  - compose_context (optional, v1 uses templates)    │  │  │
+│  │  └─────────────────────────────────────────────────────┘  │  │
+│  │  ┌─────────────────────────────────────────────────────┐  │  │
+│  │  │                  CR-Memory Module                    │  │  │
+│  │  │  - Background job (periodic/after N episodes)       │  │  │
+│  │  │  - Reads memory_metrics + policy                    │  │  │
+│  │  │  - Promotes / deprecates / adjusts TTL              │  │  │
+│  │  └─────────────────────────────────────────────────────┘  │  │
+│  │                          │                                │  │
 │  │                          ▼                                │  │
 │  │                 ┌─────────────────┐                       │  │
 │  │                 │   LLM Router    │                       │  │
@@ -98,41 +108,53 @@ High-level system boundaries and data flow.
 
 ### ARCH-001: Rust Daemon
 
-**Responsibility:** All local I/O, no LLM logic
+**Responsibility:** All local I/O, storage, vector search, guard interception. **100% offline - no HTTP/network calls.**
 
 | Module | Crate | Purpose |
 |--------|-------|---------|
 | Log Watcher | notify | File system events for CLI logs |
 | MCP Server | rmcp | Model Context Protocol server |
 | CLI Handler | clap | User-facing commands |
-| IPC Router | tokio | JSON-RPC over Unix socket |
-| SQLite Storage | rusqlite + sqlite-vec | Memories, events, config |
-| Events Queue | crossbeam | Buffering before agent processing |
-| Config Manager | serde | User and project settings |
+| Guard Interceptor | - | Check emergency guards before tool execution |
+| Commit Layer | - | Execute memory ops (ADD/UPDATE/DEPRECATE) |
+| Retrieval Engine | rusqlite + sqlite-vec | Key lookup + vector search + ranking |
+| SQLite Storage | rusqlite + sqlite-vec | All tables: memories, evidence, memory_metrics, episodes, guard_patterns |
+
+**Owns:**
+- All SQLite read/write operations
+- All sqlite-vec vector similarity queries
+- Guard pattern matching (deterministic, no LLM)
+- Memory metrics updates (use_count, opportunities)
+- Receiving embeddings from Memory Service as float32 arrays
 
 **Never Contains:**
 - LLM API calls
-- Memory extraction logic
-- Semantic similarity computation (done via sqlite-vec)
+- Embedding generation (done by Memory Service)
+- Any HTTP/network client code
 
 ---
 
-### ARCH-002: Python Agent
+### ARCH-002: Python Memory Service
 
-**Responsibility:** All LLM operations
+**Responsibility:** All LLM and embedding operations. **All HTTP/network calls live here.**
 
-| Module | Library | Purpose |
-|--------|---------|---------|
-| Ingestion Agent | PydanticAI | Episode → memories extraction |
-| Retrieval Agent | PydanticAI | Task → relevant memories |
-| Conflict Resolver | PydanticAI | Semantic conflict detection |
-| LLM Router | httpx | Provider switching, rate limiting |
-| Embedding Client | openai | Vector generation |
+| Module | Purpose | Model Tier |
+|--------|---------|------------|
+| Memory Writer | Episode → ops[] extraction | strong_model |
+| Retrieval | embed_text, compose_context (optional) | fast_model |
+| CR-Memory | Background promotion/deprecation | rules only (v1) |
+
+**Owns:**
+- All LLM API calls (Memory Writer)
+- All embedding generation (returns vectors to daemon via IPC)
+- CR-Memory evaluation logic
 
 **Never Contains:**
 - File watching
-- Direct database writes (goes through daemon IPC)
+- Direct database read/write (all storage via daemon IPC)
+- sqlite-vec queries (daemon handles vector search)
 - MCP protocol handling
+- Guard pattern matching
 
 ---
 
@@ -140,15 +162,20 @@ High-level system boundaries and data flow.
 
 **Responsibility:** Persistence and vector search
 
-| Database | Location | Contents |
+| Database | Location | Contains |
 |----------|----------|----------|
-| Global DB | `~/.sqrl/squirrel.db` | User profile, global memories, access logs |
-| Project DB | `<repo>/.sqrl/squirrel.db` | Project memories, raw events |
+| Global DB | `~/.sqrl/squirrel.db` | memories (scope=global), memory_metrics, evidence |
+| Project DB | `<repo>/.sqrl/squirrel.db` | memories (scope=project/repo_path), episodes, evidence, memory_metrics, guard_patterns |
 
-**Vector Search:**
-- sqlite-vec extension for cosine similarity
-- 1536-dim OpenAI embeddings (default)
-- Indexed for top-k queries
+**Tables:** See SCHEMAS.md for full definitions.
+
+| Table | Purpose |
+|-------|---------|
+| memories | Core memory storage with embeddings |
+| evidence | Links memories to source episodes |
+| memory_metrics | Tracks use_count, opportunities, regret for CR-Memory |
+| episodes | Raw episode timeline (events_json) |
+| guard_patterns | Structured patterns for emergency guards |
 
 ---
 
@@ -160,15 +187,32 @@ High-level system boundaries and data flow.
 1. User codes with AI CLI
 2. CLI writes to log file
 3. Daemon detects file change (notify)
-4. Daemon parses new log entries
-5. Events queued in memory
-6. Batch trigger (time/count/shutdown)
-7. Daemon calls agent via IPC (ingest_episode)
-8. Agent extracts memories (LLM)
-9. Agent returns memories to daemon
-10. Daemon writes to SQLite
-11. Daemon updates indexes
+4. Daemon parses new log entries, buffers events
+5. Episode boundary triggered:
+   - Task boundary detected (new user query starts different task)
+   - High-impact event resolved (severe frustration + success)
+   - User explicit flush (sqrl flush)
+6. Daemon inserts episodes row with events_json
+7. Daemon calls Memory Service: ingest_episode(
+     episode_id, project_id, scope, owner, episode_summary,
+     recent_memories, policy_hints
+   )
+8. Memory Writer runs single strong-model prompt
+9. Memory Writer returns JSON:
+   - ops[] (ADD / UPDATE / DEPRECATE / IGNORE)
+   - episode_evidence
+10. Daemon commit layer for each op:
+    - ADD: Insert memories row (status='provisional'), call embed_text,
+           store embedding, insert evidence row, init memory_metrics
+    - UPDATE: Mark old memory deprecated, insert new memory
+    - DEPRECATE: Mark target memory status='deprecated'
+11. New memories immediately available for next task
 ```
+
+**Key Points:**
+- Memory Writer does NOT return embeddings
+- Embedding generated in commit phase (daemon calls embed_text)
+- Commit is synchronous - next get_task_context sees new memories immediately
 
 **Latency Target:** <100ms for steps 3-6, async for 7-11
 
@@ -179,29 +223,114 @@ High-level system boundaries and data flow.
 ```
 1. AI CLI starts new task
 2. CLI calls MCP tool (squirrel_get_task_context)
-3. Daemon receives MCP request
-4. Daemon queries keyed facts (fast path)
-5. Daemon calls agent via IPC (get_task_context)
-6. Agent embeds task description
-7. Agent queries sqlite-vec for similar memories
-8. Agent composes context (LLM)
-9. Agent returns context to daemon
-10. Daemon returns MCP response
-11. CLI injects context into prompt
+3. Daemon receives request: get_task_context(
+     project_root, task, owner_type, owner_id, token_budget
+   )
+4. Daemon calls Memory Service: embed_text(task) → task_vector
+5. Daemon queries SQLite:
+   a. Filter: project_id, scope, owner_type/owner_id, status IN ('provisional','active')
+   b. Key-based lookup first (project.*, user.* keys)
+   c. Vector search using task_vector for semantic recall
+6. Daemon ranks candidates:
+   - Semantic similarity (base weight)
+   - Status: active > provisional
+   - Tier: emergency/long_term > short_term
+   - Kind: invariant/preference > pattern > note/guard
+   - Boost: log(1 + use_count)
+7. Daemon optionally calls Memory Service: compose_context(
+     task, memories, token_budget
+   ) OR uses templates (v1)
+8. Daemon returns to MCP/CLI:
+   - context_prompt
+   - memory_ids (used memories)
+9. Daemon updates memory_metrics for each used memory:
+   - use_count++
+   - opportunities++
+10. CLI injects context into prompt
 ```
 
-**Latency Target:** <500ms total, <20ms for trivial tasks (fast path)
+**Latency Target:** <500ms total, <20ms for trivial tasks (fast path at step 5b)
 
 ---
 
-### FLOW-003: Memory Search
+### FLOW-003: Guard Interception
+
+```
+Write-time (during FLOW-001):
+1. Memory Writer emits ADD op with kind='guard', tier='emergency'
+2. Op includes structured guard_pattern:
+   {
+     "tool": ["Bash", "Http"],
+     "command_contains": ["python", "requests"],
+     "recent_errors_contains": ["SSLError"]
+   }
+3. Commit layer inserts memory + guard_pattern into DB
+
+Run-time (before tool execution):
+1. Daemon about to execute tool (Bash/Edit/Http/etc.)
+2. Daemon collects context:
+   - Tool type
+   - Command/URL
+   - Target path/file
+   - Recent error messages
+3. Daemon loads all guards:
+   - kind='guard', tier='emergency'
+   - status IN ('provisional', 'active')
+4. For each guard, check guard_pattern:
+   - Deterministic string/prefix matching
+   - No LLM in hot path
+5. If guard matches:
+   - Per memory_policy.toml: block / warn / prompt user
+6. If no match: proceed with tool execution
+
+CR-Memory evaluation (later):
+- Guard fires often + prevents issues → extend TTL / promote
+- Guard never fires → deprecate / decay
+```
+
+**Latency Target:** <5ms for guard matching (deterministic, no LLM)
+
+---
+
+### FLOW-004: CR-Memory Evaluation
+
+```
+Trigger:
+- Periodic cron (e.g., daily)
+- After N episodes processed
+
+For each memory m (status='provisional' or 'active'):
+1. Read memory_metrics(m):
+   - opportunities
+   - use_count
+   - suspected_regret_hits
+   - estimated_regret_saved
+   - last_used_at
+2. Load policy thresholds from memory_policy.toml
+3. Evaluate:
+   a. If not enough opportunities → skip (not enough evidence)
+   b. Calculate use_ratio = use_count / opportunities
+   c. If use_ratio >= min_use_ratio AND regret_hits >= min_regret_hits:
+      → Promote: status='active', maybe tier='long_term', extend expires_at
+   d. If use_ratio <= max_use_ratio AND opportunities >= deprecation threshold:
+      → Deprecate: status='deprecated'
+   e. Check time-based decay (days since last_used_at)
+   f. Otherwise: keep current status
+4. Write updated status/tier/expires_at to memories table
+```
+
+**Note:** CR-Memory is internal background job, no external IPC. Runs inside Python Memory Service or triggered by daemon.
+
+---
+
+### FLOW-005: Memory Search
 
 ```
 1. User runs `sqrl search "query"`
-2. CLI sends IPC (search_memories)
-3. Daemon embeds query
-4. Daemon queries sqlite-vec
-5. Daemon returns ranked results
+2. CLI sends request to daemon
+3. Daemon calls Memory Service: embed_text(query) → query_vector
+4. Daemon queries sqlite-vec for similar memories
+5. Daemon returns ranked results to CLI
 6. CLI displays to user
 ```
 
@@ -222,15 +351,17 @@ High-level system boundaries and data flow.
 | Boundary | Enforcement |
 |----------|-------------|
 | No network for daemon | Rust compile-time (no reqwest) |
-| LLM keys in agent only | Environment variables, not config |
+| LLM keys in Memory Service only | Environment variables, not config |
 | Project isolation | Separate SQLite per project |
 | No cloud sync | Feature flag, default off |
+| No secrets in memories | Memory Writer constraint |
 
 ## Extension Points
 
 | Point | Mechanism | Example |
 |-------|-----------|---------|
 | New CLI support | Log parser plugins | Add Aider support |
-| New LLM provider | Agent config | Switch to local LLM |
-| New embedding model | Agent config | Use Cohere embeddings |
-| Team sync | Future daemon module | Cloud storage backend |
+| New LLM provider | Memory Service config | Switch to local LLM |
+| New embedding model | Memory Service config | Use Cohere embeddings |
+| Team sync | Future daemon module | Cloud storage backend (v2) |
+| Multi-IDE | Episodes format | Each IDE translates logs to episodes |
