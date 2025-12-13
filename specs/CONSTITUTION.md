@@ -111,6 +111,15 @@ Only change what's necessary. No drive-by refactoring. No "while I'm here" impro
 ### DR6: Spec-Driven Development
 Specs are source of truth. Code is generated output. Never introduce behavior not defined in specs. Update specs before or with code, never after.
 
+### DR7: Docs Always Current
+Keep all documentation up-to-date at every moment. When code changes, update related docs in the same commit. Never leave docs stale. Structure specs, API docs, and README must reflect current implementation.
+
+### DR8: Clean Up Test Artifacts
+Promptly clean up test files after use. Remove temporary test data, mock files, and debug outputs. Keep the project clean. Test artifacts should not accumulate in the repository.
+
+### DR9: Small Commits, Concise English
+Use small, atomic commits. Each commit should do one thing. Commit messages must be concise English - no long explanations, no Chinese, no emojis. Format: `type(scope): brief description`.
+
 ---
 
 ## Decision Authority
