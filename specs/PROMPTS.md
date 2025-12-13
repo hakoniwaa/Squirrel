@@ -23,18 +23,30 @@ Squirrel uses a 2-tier LLM strategy. **All providers are configured via LiteLLM,
 
 **ID:** PROMPT-001-MEMORY-WRITER
 
-**Purpose:** Single prompt that decides what to remember from an episode. Replaces the old two-stage pipeline (PROMPT-001-A Extraction + PROMPT-001-B Manager).
+**Purpose:** Single prompt that:
+1. Detects episode boundaries within event chunks
+2. Decides what to remember from each episode
+3. Manages carry-over state between chunks
+
+Replaces rule-based episode detection. AI decides everything (P2: AI-Primary).
+
+**Chunking Strategy:**
+- Chunk size: ? events (TBD via testing)
+- Overlap: ? events (TBD via testing)
+- Chunking is purely an engineering constraint (context limits)
+- Memory Writer decides semantic boundaries (episodes)
 
 **Input Variables:**
 
 | Variable | Type | Description |
 |----------|------|-------------|
-| episode_summary | object | Compressed events_json with events[] and stats |
+| events | array | Raw event list from chunk |
+| carry_state | string/null | State carried from previous chunk (null for first) |
 | recent_memories | array | Relevant existing memories for context |
 | project_id | string | Project identifier |
 | owner_type | string | `user`, `team`, or `org` |
 | owner_id | string | Owner identifier |
-| policy_hints | object | Policy constraints (max_memories_per_episode) |
+| policy_hints | object | Policy constraints (max_memories_per_chunk: ?) |
 
 **System Prompt:**
 ```
@@ -107,10 +119,18 @@ Use polarity=-1 for:
 
 Return JSON only:
 {
-  "ops": [
+  "episodes": [
     {
-      "op": "ADD | UPDATE | DEPRECATE | IGNORE",
+      "start_idx": 0,
+      "end_idx": 45,
+      "label": "debugging SSL certificate issue"
+    }
+  ],
+  "memories": [
+    {
+      "op": "ADD | UPDATE | DEPRECATE",
       "target_memory_id": "uuid (for UPDATE/DEPRECATE only)",
+      "episode_idx": 0,
       "scope": "project | global | repo_path",
       "owner_type": "user | team | org",
       "owner_id": "alice",
@@ -120,15 +140,30 @@ Return JSON only:
       "key": "project.http.client | null",
       "text": "1-2 sentence human-readable memory",
       "ttl_days": 30 | null,
-      "confidence": 0.0-1.0
+      "confidence": 0.0-1.0,
+      "evidence": {
+        "source": "failure_then_success | user_correction | explicit_statement | pattern_observed | guard_triggered",
+        "frustration": "none | mild | moderate | severe"
+      }
     }
   ],
-  "episode_evidence": {
-    "episode_id": "ep-...",
-    "source": "failure_then_success | user_correction | explicit_statement | pattern_observed | guard_triggered",
-    "frustration": "none | mild | moderate | severe"
-  }
+  "discard_reason": "only browsing, no decisions | null",
+  "carry_state": "working on SSL fix, user frustrated, not resolved yet | null"
 }
+
+**Field Descriptions:**
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| episodes | Yes | Detected episode boundaries with semantic labels |
+| memories | Yes | Memory operations (can be empty) |
+| discard_reason | No | Why this chunk yielded no memories (for debugging) |
+| carry_state | No | State to carry to next chunk (incomplete task, ongoing context) |
+
+**Episode Indexing:**
+- `start_idx` / `end_idx`: 0-based indices into input events array
+- Episodes can span chunk boundaries (use carry_state)
+- Multiple episodes per chunk allowed
 ```
 
 **User Prompt Template:**
@@ -136,16 +171,19 @@ Return JSON only:
 PROJECT: {project_id}
 OWNER: {owner_type}/{owner_id}
 
+CARRY STATE FROM PREVIOUS CHUNK:
+{carry_state}
+
 EXISTING MEMORIES (for context):
 {recent_memories}
 
-EPISODE SUMMARY:
-{episode_summary}
+EVENTS (chunk {chunk_index}):
+{events}
 
 POLICY HINTS:
-- Max memories this episode: {max_memories_per_episode}
+- Max memories this chunk: {max_memories_per_chunk}
 
-Analyze this episode and decide what to remember. Return JSON only.
+Analyze this event chunk. Identify episode boundaries, decide what to remember, and return any state to carry forward. Return JSON only.
 ```
 
 ---
@@ -154,26 +192,27 @@ Analyze this episode and decide what to remember. Return JSON only.
 
 **Example 1: Normal debugging episode with clear resolution**
 
-Input episode:
+Input events (chunk 1):
 ```json
-{
-  "events": [
-    {"ts": "...", "role": "user", "kind": "message", "summary": "asked to call Stripe API"},
-    {"ts": "...", "role": "assistant", "kind": "tool_call", "tool_name": "Bash", "summary": "ran python with requests"},
-    {"ts": "...", "role": "tool", "kind": "tool_result", "summary": "SSLError: certificate verify failed"},
-    {"ts": "...", "role": "assistant", "kind": "tool_call", "tool_name": "Edit", "summary": "switched to httpx"},
-    {"ts": "...", "role": "tool", "kind": "tool_result", "summary": "API call succeeded"}
-  ],
-  "stats": {"error_count": 1, "retry_loops": 0, "user_frustration": "mild"}
-}
+[
+  {"idx": 0, "ts": "...", "role": "user", "kind": "message", "summary": "asked to call Stripe API"},
+  {"idx": 1, "ts": "...", "role": "assistant", "kind": "tool_call", "tool_name": "Bash", "summary": "ran python with requests"},
+  {"idx": 2, "ts": "...", "role": "tool", "kind": "tool_result", "summary": "SSLError: certificate verify failed", "is_error": true},
+  {"idx": 3, "ts": "...", "role": "assistant", "kind": "tool_call", "tool_name": "Edit", "summary": "switched to httpx"},
+  {"idx": 4, "ts": "...", "role": "tool", "kind": "tool_result", "summary": "API call succeeded"}
+]
 ```
 
 Output:
 ```json
 {
-  "ops": [
+  "episodes": [
+    {"start_idx": 0, "end_idx": 4, "label": "debugging SSL error when calling Stripe API"}
+  ],
+  "memories": [
     {
       "op": "ADD",
+      "episode_idx": 0,
       "scope": "project",
       "owner_type": "user",
       "owner_id": "alice",
@@ -183,10 +222,12 @@ Output:
       "key": null,
       "text": "requests library has SSL certificate issues in this environment; httpx works as alternative.",
       "ttl_days": 30,
-      "confidence": 0.85
+      "confidence": 0.85,
+      "evidence": {"source": "failure_then_success", "frustration": "mild"}
     },
     {
       "op": "ADD",
+      "episode_idx": 0,
       "scope": "project",
       "owner_type": "user",
       "owner_id": "alice",
@@ -196,14 +237,12 @@ Output:
       "key": "project.http.client",
       "text": "The standard HTTP client for this project is httpx.",
       "ttl_days": null,
-      "confidence": 0.9
+      "confidence": 0.9,
+      "evidence": {"source": "failure_then_success", "frustration": "mild"}
     }
   ],
-  "episode_evidence": {
-    "episode_id": "ep-001",
-    "source": "failure_then_success",
-    "frustration": "mild"
-  }
+  "discard_reason": null,
+  "carry_state": null
 }
 ```
 
@@ -211,29 +250,30 @@ Output:
 
 **Example 2: Severe frustration with repeated failures**
 
-Input episode:
+Input events (chunk 1):
 ```json
-{
-  "events": [
-    {"ts": "...", "role": "user", "kind": "message", "summary": "fix the SSL error"},
-    {"ts": "...", "role": "assistant", "kind": "tool_call", "tool_name": "Bash", "summary": "tried requests with verify=False"},
-    {"ts": "...", "role": "tool", "kind": "tool_result", "summary": "SSLError again"},
-    {"ts": "...", "role": "assistant", "kind": "tool_call", "tool_name": "Bash", "summary": "tried updating certificates"},
-    {"ts": "...", "role": "tool", "kind": "tool_result", "summary": "SSLError still"},
-    {"ts": "...", "role": "user", "kind": "message", "summary": "ugh just use httpx already!"},
-    {"ts": "...", "role": "assistant", "kind": "tool_call", "tool_name": "Edit", "summary": "switched to httpx"},
-    {"ts": "...", "role": "tool", "kind": "tool_result", "summary": "success"}
-  ],
-  "stats": {"error_count": 3, "retry_loops": 2, "user_frustration": "severe"}
-}
+[
+  {"idx": 0, "ts": "...", "role": "user", "kind": "message", "summary": "fix the SSL error"},
+  {"idx": 1, "ts": "...", "role": "assistant", "kind": "tool_call", "tool_name": "Bash", "summary": "tried requests with verify=False"},
+  {"idx": 2, "ts": "...", "role": "tool", "kind": "tool_result", "summary": "SSLError again", "is_error": true},
+  {"idx": 3, "ts": "...", "role": "assistant", "kind": "tool_call", "tool_name": "Bash", "summary": "tried updating certificates"},
+  {"idx": 4, "ts": "...", "role": "tool", "kind": "tool_result", "summary": "SSLError still", "is_error": true},
+  {"idx": 5, "ts": "...", "role": "user", "kind": "message", "summary": "ugh just use httpx already!"},
+  {"idx": 6, "ts": "...", "role": "assistant", "kind": "tool_call", "tool_name": "Edit", "summary": "switched to httpx"},
+  {"idx": 7, "ts": "...", "role": "tool", "kind": "tool_result", "summary": "success"}
+]
 ```
 
 Output:
 ```json
 {
-  "ops": [
+  "episodes": [
+    {"start_idx": 0, "end_idx": 7, "label": "repeated SSL failures, user frustrated, switched to httpx"}
+  ],
+  "memories": [
     {
       "op": "ADD",
+      "episode_idx": 0,
       "scope": "project",
       "owner_type": "user",
       "owner_id": "alice",
@@ -243,10 +283,12 @@ Output:
       "key": null,
       "text": "Do not keep retrying requests with SSL errors in this project; switch to httpx after the first SSL error.",
       "ttl_days": 7,
-      "confidence": 0.8
+      "confidence": 0.8,
+      "evidence": {"source": "failure_then_success", "frustration": "severe"}
     },
     {
       "op": "ADD",
+      "episode_idx": 0,
       "scope": "project",
       "owner_type": "user",
       "owner_id": "alice",
@@ -256,14 +298,12 @@ Output:
       "key": null,
       "text": "In this project, requests often hits SSL certificate errors; use httpx as the default HTTP client instead.",
       "ttl_days": 30,
-      "confidence": 0.9
+      "confidence": 0.9,
+      "evidence": {"source": "failure_then_success", "frustration": "severe"}
     }
   ],
-  "episode_evidence": {
-    "episode_id": "ep-002",
-    "source": "failure_then_success",
-    "frustration": "severe"
-  }
+  "discard_reason": null,
+  "carry_state": null
 }
 ```
 
@@ -271,28 +311,25 @@ Output:
 
 **Example 3: Purely informational / browsing episode**
 
-Input episode:
+Input events (chunk 1):
 ```json
-{
-  "events": [
-    {"ts": "...", "role": "user", "kind": "message", "summary": "what files are in src/"},
-    {"ts": "...", "role": "assistant", "kind": "tool_call", "tool_name": "Bash", "summary": "ls src/"},
-    {"ts": "...", "role": "tool", "kind": "tool_result", "summary": "listed 5 files"},
-    {"ts": "...", "role": "user", "kind": "message", "summary": "ok thanks"}
-  ],
-  "stats": {"error_count": 0, "retry_loops": 0, "user_frustration": "none"}
-}
+[
+  {"idx": 0, "ts": "...", "role": "user", "kind": "message", "summary": "what files are in src/"},
+  {"idx": 1, "ts": "...", "role": "assistant", "kind": "tool_call", "tool_name": "Bash", "summary": "ls src/"},
+  {"idx": 2, "ts": "...", "role": "tool", "kind": "tool_result", "summary": "listed 5 files"},
+  {"idx": 3, "ts": "...", "role": "user", "kind": "message", "summary": "ok thanks"}
+]
 ```
 
 Output:
 ```json
 {
-  "ops": [],
-  "episode_evidence": {
-    "episode_id": "ep-003",
-    "source": "pattern_observed",
-    "frustration": "none"
-  }
+  "episodes": [
+    {"start_idx": 0, "end_idx": 3, "label": "browsing src/ directory"}
+  ],
+  "memories": [],
+  "discard_reason": "purely informational browsing, no decisions or learnings",
+  "carry_state": null
 }
 ```
 
@@ -300,25 +337,26 @@ Output:
 
 **Example 4: User preference detected**
 
-Input episode:
+Input events (chunk 1):
 ```json
-{
-  "events": [
-    {"ts": "...", "role": "assistant", "kind": "tool_call", "tool_name": "Edit", "summary": "wrote function with callbacks"},
-    {"ts": "...", "role": "user", "kind": "message", "summary": "no, use async/await instead"},
-    {"ts": "...", "role": "assistant", "kind": "tool_call", "tool_name": "Edit", "summary": "rewrote with async/await"},
-    {"ts": "...", "role": "user", "kind": "message", "summary": "yes, always use async"}
-  ],
-  "stats": {"error_count": 0, "retry_loops": 0, "user_frustration": "mild"}
-}
+[
+  {"idx": 0, "ts": "...", "role": "assistant", "kind": "tool_call", "tool_name": "Edit", "summary": "wrote function with callbacks"},
+  {"idx": 1, "ts": "...", "role": "user", "kind": "message", "summary": "no, use async/await instead"},
+  {"idx": 2, "ts": "...", "role": "assistant", "kind": "tool_call", "tool_name": "Edit", "summary": "rewrote with async/await"},
+  {"idx": 3, "ts": "...", "role": "user", "kind": "message", "summary": "yes, always use async"}
+]
 ```
 
 Output:
 ```json
 {
-  "ops": [
+  "episodes": [
+    {"start_idx": 0, "end_idx": 3, "label": "user corrects callback style to async/await"}
+  ],
+  "memories": [
     {
       "op": "ADD",
+      "episode_idx": 0,
       "scope": "global",
       "owner_type": "user",
       "owner_id": "alice",
@@ -328,16 +366,40 @@ Output:
       "key": "user.pref.async_style",
       "text": "User prefers async/await over callbacks.",
       "ttl_days": null,
-      "confidence": 0.95
+      "confidence": 0.95,
+      "evidence": {"source": "user_correction", "frustration": "mild"}
     }
   ],
-  "episode_evidence": {
-    "episode_id": "ep-004",
-    "source": "user_correction",
-    "frustration": "mild"
-  }
+  "discard_reason": null,
+  "carry_state": null
 }
 ```
+
+---
+
+**Example 5: Incomplete task spanning chunks (carry_state usage)**
+
+Input events (chunk 1, last chunk had carry_state: "working on database migration"):
+```json
+[
+  {"idx": 0, "ts": "...", "role": "assistant", "kind": "tool_call", "tool_name": "Edit", "summary": "updated migration script"},
+  {"idx": 1, "ts": "...", "role": "tool", "kind": "tool_result", "summary": "file saved"},
+  {"idx": 2, "ts": "...", "role": "assistant", "kind": "tool_call", "tool_name": "Bash", "summary": "ran migration"},
+  {"idx": 3, "ts": "...", "role": "tool", "kind": "tool_result", "summary": "migration failed: foreign key constraint", "is_error": true}
+]
+```
+
+Output:
+```json
+{
+  "episodes": [],
+  "memories": [],
+  "discard_reason": null,
+  "carry_state": "database migration in progress, failed on foreign key constraint, not yet resolved"
+}
+```
+
+Note: No episode closed because task is incomplete. Memory Writer waits for resolution before extracting learnings.
 
 ---
 
@@ -480,14 +542,12 @@ All prompts must handle:
 | Timeout | Log, return empty result, don't block |
 | Content filter | Log, skip memory, continue |
 
-## Pre-filtering (Optional)
+## Pre-filtering
 
-Before calling Memory Writer, an optional pre-filter can skip trivial episodes:
+**Status:** Removed for v1 (AI-Primary approach).
 
-| Condition | Action |
-|-----------|--------|
-| < 3 events | Skip Memory Writer |
-| All events are reads (ls, cat) | Skip Memory Writer |
-| No errors, no user corrections | Consider skipping |
+Per P2: AI-Primary, the Memory Writer decides what to discard. No rule-based pre-filtering.
 
-Pre-filtering can use rules or a cheap model. The goal is to avoid wasting strong-model tokens on episodes with nothing to learn.
+The Memory Writer uses `discard_reason` to explain why a chunk yielded no memories. This provides transparency without hardcoded rules.
+
+Future versions may add optional pre-filtering for cost optimization, but v1 sends all chunks to Memory Writer.

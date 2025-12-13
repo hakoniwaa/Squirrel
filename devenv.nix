@@ -7,6 +7,7 @@
   # Environment variables
   env = {
     SQUIRREL_DEV = "1";
+    PYTHONPATH = "./src";
   };
 
   # Packages available in the development shell
@@ -42,12 +43,21 @@
     venv = {
       enable = true;
       requirements = ''
-        pydantic-ai
+        # Core dependencies
+        litellm>=1.0.0
+        pydantic>=2.0.0
+        pydantic-ai>=0.1.0
+
+        # HTTP client
         httpx
-        openai
-        pytest
-        pytest-asyncio
-        ruff
+
+        # Dev dependencies
+        pytest>=8.0.0
+        pytest-asyncio>=0.23.0
+        ruff>=0.1.0
+
+        # Install sqrl in editable mode
+        -e .
       '';
     };
   };
@@ -71,10 +81,17 @@
   scripts = {
     # Run all tests
     test-all.exec = ''
-      echo "Running Rust tests..."
-      cargo test
       echo "Running Python tests..."
-      pytest agent/tests/
+      pytest tests/ -v
+      if [ -d "daemon" ]; then
+        echo "Running Rust tests..."
+        cargo test
+      fi
+    '';
+
+    # Run Python tests only
+    test-py.exec = ''
+      pytest tests/ -v
     '';
 
     # Start daemon in development mode
@@ -84,14 +101,18 @@
 
     # Format all code
     fmt.exec = ''
-      cargo fmt
-      ruff format agent/
+      ruff format src/ tests/
+      if [ -d "daemon" ]; then
+        cargo fmt
+      fi
     '';
 
     # Lint all code
     lint.exec = ''
-      cargo clippy -- -D warnings
-      ruff check agent/
+      ruff check src/ tests/
+      if [ -d "daemon" ]; then
+        cargo clippy -- -D warnings
+      fi
     '';
   };
 
@@ -109,10 +130,11 @@
     echo ""
     echo "Available commands:"
     echo "  test-all    - Run all tests"
-    echo "  dev-daemon  - Start daemon in dev mode"
+    echo "  test-py     - Run Python tests only"
     echo "  fmt         - Format all code"
     echo "  lint        - Lint all code"
     echo ""
+    echo "Python package: sqrl (src/sqrl/)"
     echo "See specs/ for project specifications"
   '';
 

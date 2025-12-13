@@ -367,6 +367,30 @@ For each memory m (status='provisional' or 'active'):
 | No cloud sync | Feature flag, default off |
 | No secrets in memories | Memory Writer constraint |
 
+## Python Package Structure
+
+```
+src/sqrl/
+├── __init__.py          # Package exports
+├── chunking.py          # Event chunking for Memory Writer (PROMPT-001)
+├── db/
+│   ├── __init__.py
+│   └── schema.py        # SQLite schema (SCHEMA-001 to 004)
+└── parsers/
+    ├── __init__.py
+    ├── base.py          # BaseParser interface, Event/Episode dataclasses
+    └── claude_code.py   # Claude Code log parser
+```
+
+| Module | Purpose | Spec Reference |
+|--------|---------|----------------|
+| sqrl.chunking | Split events into chunks for Memory Writer | PROMPT-001 |
+| sqrl.db.schema | SQLite schema, init, connections | SCHEMA-001 to 004 |
+| sqrl.parsers.base | Parser interface, data models | - |
+| sqrl.parsers.claude_code | Parse Claude Code JSONL logs | - |
+
+---
+
 ## Extension Points
 
 | Point | Mechanism | Example |
