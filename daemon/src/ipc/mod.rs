@@ -166,6 +166,52 @@ pub async fn send_flush(socket_path: &str) -> Result<(), Error> {
     Ok(())
 }
 
+/// Default socket path for Memory Service (Python).
+pub const MEMORY_SERVICE_SOCKET: &str = "/tmp/sqrl_agent.sock";
+
+/// Send ingest_chunk request to Memory Service (IPC-001).
+pub async fn send_ingest_chunk(
+    socket_path: &str,
+    request: &crate::watcher::buffer::IngestChunkRequest,
+) -> Result<crate::watcher::buffer::IngestChunkResponse, Error> {
+    let stream = UnixStream::connect(socket_path).await.map_err(|e| {
+        Error::ipc(format!(
+            "Failed to connect to Memory Service at {}: {}",
+            socket_path, e
+        ))
+    })?;
+    let (reader, mut writer) = stream.into_split();
+
+    let rpc_request = JsonRpcRequest {
+        jsonrpc: "2.0".to_string(),
+        id: serde_json::json!(1),
+        method: "ingest_chunk".to_string(),
+        params: serde_json::to_value(request).map_err(|e| Error::ipc(e.to_string()))?,
+    };
+
+    let request_json = serde_json::to_string(&rpc_request)?;
+    writer.write_all(request_json.as_bytes()).await?;
+    writer.write_all(b"\n").await?;
+
+    let mut reader = BufReader::new(reader);
+    let mut response_line = String::new();
+    reader.read_line(&mut response_line).await?;
+
+    let response: JsonRpcResponse = serde_json::from_str(&response_line)?;
+    if let Some(error) = response.error {
+        return Err(Error::ipc(format!(
+            "Memory Service error: {}",
+            error.message
+        )));
+    }
+
+    let result = response
+        .result
+        .ok_or_else(|| Error::ipc("Empty result from Memory Service"))?;
+
+    serde_json::from_value(result).map_err(|e| Error::ipc(format!("Invalid response: {}", e)))
+}
+
 /// Send status request to daemon.
 #[allow(dead_code)] // For sqrl status (CLI-008)
 pub async fn send_status(socket_path: &str) -> Result<serde_json::Value, Error> {

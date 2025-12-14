@@ -43,6 +43,7 @@ chrono = { version = "0.4", features = ["serde"] }
 dirs = "6"
 toml = "0.8"
 regex = "1"
+whoami = "1"
 
 [dev-dependencies]
 tempfile = "3"

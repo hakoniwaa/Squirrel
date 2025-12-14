@@ -7,6 +7,7 @@ pub mod export;
 pub mod flush;
 pub mod forget;
 pub mod gitignore;
+pub mod history;
 pub mod import;
 pub mod init;
 pub mod instructions;

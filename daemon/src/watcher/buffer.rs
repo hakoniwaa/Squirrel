@@ -135,6 +135,7 @@ impl EventBuffer {
     }
 
     /// Set chunk size for batching.
+    #[allow(dead_code)] // For IPC integration
     pub fn with_chunk_size(mut self, size: usize) -> Self {
         self.chunk_size = size;
         self
@@ -171,6 +172,7 @@ impl EventBuffer {
     }
 
     /// Check if any session has enough events for a chunk.
+    #[allow(dead_code)] // For IPC integration
     pub fn has_ready_chunk(&self) -> bool {
         self.sessions
             .values()

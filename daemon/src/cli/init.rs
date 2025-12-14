@@ -8,6 +8,7 @@ use crate::error::Error;
 
 use super::agents::{detect_agents, AgentConfig, AgentId, DetectedAgent};
 use super::gitignore;
+use super::history;
 use super::instructions;
 use super::mcp_config;
 
@@ -95,11 +96,38 @@ pub async fn run(skip_history: bool) -> Result<(), Error> {
     gitignore::update_gitignore(&gitignore_path)?;
     println!("Updated .gitignore");
 
-    // Process historical logs
+    // Process historical logs (ADR-011)
     if !skip_history {
         println!("Scanning for historical logs...");
-        // TODO: Implement historical log ingestion (ADR-011)
-        println!("Historical log ingestion not yet implemented");
+        let db = Database::open(&db_path)?;
+
+        // Get owner info from config or use defaults
+        let owner_type = "user";
+        let owner_id = whoami::username();
+
+        match history::process_history(&cwd, &project_id, &db, owner_type, &owner_id).await {
+            Ok(result) => {
+                if result.sessions_processed > 0 {
+                    println!(
+                        "Processed {} sessions ({} events) → {} memories",
+                        result.sessions_processed, result.events_processed, result.memories_created
+                    );
+                } else {
+                    println!("No historical sessions found for this project");
+                }
+
+                if !result.errors.is_empty() {
+                    eprintln!("Warnings during history processing:");
+                    for error in &result.errors {
+                        eprintln!("  - {}", error);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Warning: Historical processing failed: {}", e);
+                eprintln!("You can manually process history later with 'sqrl sync'");
+            }
+        }
     }
 
     println!("Squirrel initialized successfully!");

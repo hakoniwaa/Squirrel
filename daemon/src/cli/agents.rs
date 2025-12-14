@@ -38,6 +38,7 @@ impl AgentId {
     }
 
     /// Get v1 supported agents.
+    #[allow(dead_code)] // For CLI-001 agent filtering
     pub fn v1_supported() -> &'static [AgentId] {
         &[
             AgentId::Claude,
@@ -191,6 +192,7 @@ pub fn detect_agents(project_root: &Path) -> Vec<DetectedAgent> {
 }
 
 /// Filter agents by enabled list from config.
+#[allow(dead_code)] // For CLI-001 agent filtering
 pub fn filter_enabled(detected: Vec<DetectedAgent>, enabled: &[AgentId]) -> Vec<DetectedAgent> {
     detected
         .into_iter()

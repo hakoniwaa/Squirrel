@@ -78,6 +78,7 @@ fn replace_managed_block(content: &str) -> Result<String, Error> {
 }
 
 /// Remove Squirrel instructions from a file.
+#[allow(dead_code)] // For sqrl uninit
 pub fn remove_instructions(path: &Path) -> Result<bool, Error> {
     if !path.exists() {
         return Ok(false);

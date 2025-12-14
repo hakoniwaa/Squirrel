@@ -65,6 +65,7 @@ impl LogWatcher {
     }
 
     /// Get a handle to the event buffer.
+    #[allow(dead_code)] // For IPC integration
     pub fn buffer(&self) -> Arc<Mutex<EventBuffer>> {
         self.buffer.clone()
     }

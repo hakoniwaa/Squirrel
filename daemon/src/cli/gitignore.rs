@@ -63,6 +63,7 @@ fn replace_managed_block(content: &str) -> Result<String, Error> {
 }
 
 /// Remove Squirrel entries from .gitignore.
+#[allow(dead_code)] // For sqrl uninit
 pub fn remove_from_gitignore(path: &Path) -> Result<bool, Error> {
     if !path.exists() {
         return Ok(false);
