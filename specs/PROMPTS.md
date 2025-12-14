@@ -46,7 +46,7 @@ Replaces rule-based episode detection. AI decides everything (P2: AI-Primary).
 | project_id | string | Project identifier |
 | owner_type | string | `user`, `team`, or `org` |
 | owner_id | string | Owner identifier |
-| policy_hints | object | Policy constraints (max_memories_per_chunk: ?) |
+| policy_hints | object | Policy constraints (max_memories_per_episode: ?) |
 
 **System Prompt:**
 ```
@@ -181,7 +181,7 @@ EVENTS (chunk {chunk_index}):
 {events}
 
 POLICY HINTS:
-- Max memories this chunk: {max_memories_per_chunk}
+- Max memories per episode: {max_memories_per_episode}
 
 Analyze this event chunk. Identify episode boundaries, decide what to remember, and return any state to carry forward. Return JSON only.
 ```

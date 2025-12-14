@@ -45,50 +45,58 @@ Unix socket at `/tmp/sqrl_agent.sock`. JSON-RPC 2.0 format.
 
 ## IPC Methods
 
-### IPC-001: ingest_episode
+### IPC-001: ingest_chunk
 
-Daemon → Memory Service. Process episode with Memory Writer, return ops array.
+Daemon → Memory Service. Process event chunk with Memory Writer, return ops array.
+
+**Design:** Memory Writer detects episode boundaries from raw events (P2: AI-Primary). No pre-bounded episodes.
 
 **Request:**
 ```json
 {
   "jsonrpc": "2.0",
-  "method": "ingest_episode",
+  "method": "ingest_chunk",
   "params": {
-    "episode_id": "ep-2024-12-10-001",
     "project_id": "payment-api",
-    "scope": "project",
     "owner_type": "user",
     "owner_id": "alice",
-    "episode_summary": {
-      "events": [
-        {
-          "ts": "2024-12-10T10:00:00Z",
-          "role": "user",
-          "kind": "message",
-          "summary": "asked to call Stripe API"
-        },
-        {
-          "ts": "2024-12-10T10:01:00Z",
-          "role": "assistant",
-          "kind": "tool_call",
-          "tool_name": "Bash",
-          "summary": "ran python script with requests library"
-        },
-        {
-          "ts": "2024-12-10T10:01:30Z",
-          "role": "tool",
-          "kind": "tool_result",
-          "summary": "SSLError: certificate verify failed"
-        }
-      ],
-      "stats": {
-        "error_count": 3,
-        "retry_loops": 2,
-        "tests_final_status": null,
-        "user_frustration": "severe"
+    "chunk_index": 0,
+    "events": [
+      {
+        "ts": "2024-12-10T10:00:00Z",
+        "role": "user",
+        "kind": "message",
+        "summary": "asked to call Stripe API"
+      },
+      {
+        "ts": "2024-12-10T10:01:00Z",
+        "role": "assistant",
+        "kind": "tool_call",
+        "tool_name": "Bash",
+        "summary": "ran python script with requests library"
+      },
+      {
+        "ts": "2024-12-10T10:01:30Z",
+        "role": "tool",
+        "kind": "tool_result",
+        "summary": "SSLError: certificate verify failed",
+        "is_error": true
+      },
+      {
+        "ts": "2024-12-10T10:02:00Z",
+        "role": "assistant",
+        "kind": "tool_call",
+        "tool_name": "Edit",
+        "summary": "switched to httpx"
+      },
+      {
+        "ts": "2024-12-10T10:02:30Z",
+        "role": "tool",
+        "kind": "tool_result",
+        "summary": "API call succeeded"
       }
-    },
+    ],
+    "carry_state": null,
     "recent_memories": [
       {
         "id": "mem-123",
@@ -97,10 +105,7 @@ Daemon → Memory Service. Process episode with Memory Writer, return ops array.
         "key": "project.http.client",
         "text": "The standard HTTP client is httpx."
       }
-    ],
-    "policy_hints": {
-      "max_memories_per_episode": 3
-    }
+    ]
   },
   "id": 1
 }
@@ -110,36 +115,30 @@ Daemon → Memory Service. Process episode with Memory Writer, return ops array.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| episode_id | string | Yes | Episode UUID |
 | project_id | string | Yes | Repo/project identifier |
-| scope | string | Yes | `global`, `project`, or `repo_path` |
 | owner_type | string | Yes | `user`, `team`, or `org` |
 | owner_id | string | Yes | User/team/org identifier |
-| episode_summary | object | Yes | Compressed events_json (see SCHEMA-004) |
+| chunk_index | integer | Yes | Index of this chunk (0-based) |
+| events | array | Yes | Raw events for this chunk |
+| carry_state | string | No | State from previous chunk (null for first chunk) |
 | recent_memories | array | No | Relevant existing memories for context |
-| policy_hints | object | No | Policy constraints (max_memories_per_episode) |
 
 **Response:**
 ```json
 {
   "jsonrpc": "2.0",
   "result": {
-    "ops": [
+    "episodes": [
+      {
+        "start_idx": 0,
+        "end_idx": 4,
+        "label": "debugging SSL error when calling Stripe API"
+      }
+    ],
+    "memories": [
       {
         "op": "ADD",
-        "scope": "project",
-        "owner_type": "user",
-        "owner_id": "alice",
-        "kind": "guard",
-        "tier": "emergency",
-        "polarity": -1,
-        "key": null,
-        "text": "Do not keep retrying requests with SSL in this project; switch to httpx after the first SSL error.",
-        "ttl_days": 3,
-        "confidence": 0.8
-      },
-      {
-        "op": "ADD",
+        "episode_idx": 0,
         "scope": "project",
         "owner_type": "user",
         "owner_id": "alice",
@@ -147,13 +146,18 @@ Daemon → Memory Service. Process episode with Memory Writer, return ops array.
         "tier": "short_term",
         "polarity": -1,
         "key": null,
-        "text": "In this project, requests often hits SSL certificate errors; use httpx as the default HTTP client instead.",
+        "text": "requests library has SSL certificate issues in this environment; httpx works as alternative.",
         "ttl_days": 30,
-        "confidence": 0.85
+        "confidence": 0.85,
+        "evidence": {
+          "source": "failure_then_success",
+          "frustration": "mild"
+        }
       },
       {
         "op": "UPDATE",
         "target_memory_id": "mem-123",
+        "episode_idx": 0,
         "scope": "project",
         "owner_type": "user",
         "owner_id": "alice",
@@ -163,14 +167,15 @@ Daemon → Memory Service. Process episode with Memory Writer, return ops array.
         "key": "project.http.client",
         "text": "The standard HTTP client is httpx. Do not use requests due to SSL issues.",
         "ttl_days": null,
-        "confidence": 0.9
+        "confidence": 0.9,
+        "evidence": {
+          "source": "failure_then_success",
+          "frustration": "mild"
+        }
       }
     ],
-    "episode_evidence": {
-      "episode_id": "ep-2024-12-10-001",
-      "source": "failure_then_success",
-      "frustration": "severe"
-    }
+    "carry_state": null,
+    "discard_reason": null
   },
   "id": 1
 }
@@ -180,23 +185,29 @@ Daemon → Memory Service. Process episode with Memory Writer, return ops array.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| ops | array | Array of memory operations |
-| ops[].op | string | `ADD`, `UPDATE`, `DEPRECATE`, or `IGNORE` |
-| ops[].target_memory_id | string | For UPDATE/DEPRECATE: ID of memory to supersede |
-| ops[].scope | string | `global`, `project`, or `repo_path` |
-| ops[].owner_type | string | `user`, `team`, or `org` |
-| ops[].owner_id | string | Owner identifier |
-| ops[].kind | string | `preference`, `invariant`, `pattern`, `guard`, `note` |
-| ops[].tier | string | `short_term`, `long_term`, `emergency` |
-| ops[].polarity | integer | `+1` (recommend) or `-1` (avoid/anti-pattern) |
-| ops[].key | string | Optional declarative key |
-| ops[].text | string | Human-readable memory content |
-| ops[].ttl_days | integer | Days until expiry (null = no expiry) |
-| ops[].confidence | float | 0.0-1.0 confidence score |
-| episode_evidence | object | Episode-level signals |
-| episode_evidence.episode_id | string | Source episode |
-| episode_evidence.source | string | How memory was derived |
-| episode_evidence.frustration | string | Episode frustration level |
+| episodes | array | Detected episode boundaries |
+| episodes[].start_idx | integer | Start index in events array (0-based) |
+| episodes[].end_idx | integer | End index in events array (inclusive) |
+| episodes[].label | string | Semantic label for episode |
+| memories | array | Array of memory operations |
+| memories[].op | string | `ADD`, `UPDATE`, `DEPRECATE` |
+| memories[].target_memory_id | string | For UPDATE/DEPRECATE: ID of memory to supersede |
+| memories[].episode_idx | integer | Index into episodes array |
+| memories[].scope | string | `global`, `project`, or `repo_path` |
+| memories[].owner_type | string | `user`, `team`, or `org` |
+| memories[].owner_id | string | Owner identifier |
+| memories[].kind | string | `preference`, `invariant`, `pattern`, `guard`, `note` |
+| memories[].tier | string | `short_term`, `long_term`, `emergency` |
+| memories[].polarity | integer | `+1` (recommend) or `-1` (avoid/anti-pattern) |
+| memories[].key | string | Optional declarative key |
+| memories[].text | string | Human-readable memory content |
+| memories[].ttl_days | integer | Days until expiry (null = no expiry) |
+| memories[].confidence | float | 0.0-1.0 confidence score |
+| memories[].evidence | object | Evidence for memory derivation |
+| memories[].evidence.source | string | How memory was derived |
+| memories[].evidence.frustration | string | Episode frustration level |
+| carry_state | string | State to carry to next chunk (null if complete) |
+| discard_reason | string | Why chunk yielded no memories (null if memories extracted) |
 
 **Operation Semantics:**
 
@@ -205,14 +216,13 @@ Daemon → Memory Service. Process episode with Memory Writer, return ops array.
 | ADD | Insert new memory with status='provisional' |
 | UPDATE | Mark target_memory_id as deprecated, insert new memory |
 | DEPRECATE | Mark target_memory_id as status='deprecated' |
-| IGNORE | No action (duplicate or not worth storing) |
 
 **Errors:**
 
 | Code | Message | When |
 |------|---------|------|
-| -32001 | Episode empty | No events in episode |
-| -32002 | Invalid project | Project path doesn't exist |
+| -32001 | Chunk empty | No events in chunk |
+| -32002 | Invalid project | Project doesn't exist |
 | -32003 | LLM error | Memory Writer call failed |
 
 **Model Tier:** strong_model

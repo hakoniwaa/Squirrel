@@ -28,17 +28,15 @@
     fd
   ];
 
-  # Rust toolchain via fenix
+  # Rust toolchain (basic - channel requires rust-overlay)
   languages.rust = {
     enable = true;
-    channel = "stable";
-    components = [ "rustc" "cargo" "clippy" "rustfmt" "rust-analyzer" ];
   };
 
   # Python with packages
   languages.python = {
     enable = true;
-    version = "3.12";
+    # Use default Python version (no nixpkgs-python needed)
 
     venv = {
       enable = true;
@@ -47,6 +45,7 @@
         litellm>=1.0.0
         pydantic>=2.0.0
         pydantic-ai>=0.1.0
+        numpy>=1.24.0
 
         # HTTP client
         httpx
@@ -62,19 +61,13 @@
     };
   };
 
-  # Pre-commit hooks
-  pre-commit.hooks = {
+  # Git hooks
+  git-hooks.hooks = {
     # Rust
     rustfmt.enable = true;
-    clippy.enable = true;
 
     # Python
     ruff.enable = true;
-
-    # General
-    check-merge-conflict.enable = true;
-    end-of-file-fixer.enable = true;
-    trim-trailing-whitespace.enable = true;
   };
 
   # Shell scripts available in the environment

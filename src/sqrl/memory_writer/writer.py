@@ -1,0 +1,206 @@
+"""Memory Writer - LLM-based episode processing using PydanticAI."""
+
+import json
+import os
+from dataclasses import dataclass
+from typing import Optional
+
+from pydantic_ai import Agent, RunContext
+
+from sqrl.chunking import events_to_json
+from sqrl.memory_writer.models import MemoryWriterOutput
+from sqrl.memory_writer.prompts import SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
+from sqrl.parsers.base import Event
+
+
+@dataclass
+class MemoryWriterConfig:
+    """Configuration for Memory Writer.
+
+    Model format: 'litellm:<litellm-model-id>'
+    - PydanticAI uses 'litellm:' prefix to route to LiteLLM backend
+    - Examples: 'litellm:gpt-4o', 'litellm:anthropic/claude-3-5-sonnet'
+    - See https://docs.litellm.ai/docs/providers for model identifiers
+
+    max_memories_per_episode: ? (TBD via testing)
+    """
+
+    # Format: 'litellm:<model>' e.g., 'litellm:gpt-4o'
+    model: str | None = None
+    # [TBD via testing]
+    max_memories_per_episode: int | None = None
+
+    def __post_init__(self):
+        # Model from env var (required)
+        env_model = os.getenv("SQRL_STRONG_MODEL")
+        if not env_model:
+            raise ValueError(
+                "SQRL_STRONG_MODEL env var required. "
+                "Format: LiteLLM model ID (e.g., 'gpt-4o', 'anthropic/claude-3-5-sonnet')"
+            )
+        # Prepend 'litellm:' for PydanticAI to use LiteLLM backend
+        self.model = f"litellm:{env_model}"
+
+        # max_memories_per_episode from env or None (TBD)
+        env_max = os.getenv("SQRL_MAX_MEMORIES_PER_EPISODE")
+        if env_max:
+            self.max_memories_per_episode = int(env_max)
+
+
+@dataclass
+class ChunkContext:
+    """Context passed to PydanticAI agent for each chunk."""
+
+    events_json: str
+    project_id: str
+    owner_type: str
+    owner_id: str
+    chunk_index: int
+    carry_state: str
+    recent_memories: str
+    # [TBD via testing. None = no limit specified]
+    max_memories_per_episode: int | None
+
+
+class MemoryWriter:
+    """
+    Memory Writer for processing event chunks.
+
+    Uses PydanticAI to call LLM with PROMPT-001:
+    1. Detect episode boundaries
+    2. Extract memories
+    3. Manage carry-over state
+    """
+
+    def __init__(self, config: Optional[MemoryWriterConfig] = None):
+        self.config = config or MemoryWriterConfig()
+        self._agent = self._create_agent()
+
+    def _create_agent(self) -> Agent[ChunkContext, MemoryWriterOutput]:
+        """Create PydanticAI agent with structured output."""
+        agent = Agent(
+            self.config.model,
+            deps_type=ChunkContext,
+            output_type=MemoryWriterOutput,
+        )
+
+        @agent.system_prompt
+        def build_system_prompt(ctx: RunContext[ChunkContext]) -> str:
+            # Handle None case for max_memories_per_episode (TBD in spec)
+            max_memories_str = (
+                str(ctx.deps.max_memories_per_episode)
+                if ctx.deps.max_memories_per_episode is not None
+                else "(no limit - TBD)"
+            )
+            return SYSTEM_PROMPT.format(
+                max_memories_per_episode=max_memories_str,
+            )
+
+        return agent
+
+    def _format_memories(self, memories: list[dict]) -> str:
+        """Format existing memories for context."""
+        if not memories:
+            return "(none)"
+
+        lines = []
+        for m in memories:
+            lines.append(f"- [{m.get('kind', '?')}] {m.get('text', '')}")
+        return "\n".join(lines)
+
+    def _build_user_prompt(self, ctx: ChunkContext) -> str:
+        """Build the user prompt from context."""
+        # Handle None case for max_memories_per_episode (TBD in spec)
+        max_memories_str = (
+            str(ctx.max_memories_per_episode)
+            if ctx.max_memories_per_episode is not None
+            else "(no limit - TBD)"
+        )
+        return USER_PROMPT_TEMPLATE.format(
+            project_id=ctx.project_id,
+            owner_type=ctx.owner_type,
+            owner_id=ctx.owner_id,
+            carry_state=ctx.carry_state,
+            recent_memories=ctx.recent_memories,
+            chunk_index=ctx.chunk_index,
+            events=ctx.events_json,
+            max_memories_per_episode=max_memories_str,
+        )
+
+    async def process_chunk(
+        self,
+        events: list[Event],
+        project_id: str,
+        owner_type: str = "user",
+        owner_id: str = "default",
+        chunk_index: int = 0,
+        carry_state: Optional[str] = None,
+        recent_memories: Optional[list[dict]] = None,
+    ) -> MemoryWriterOutput:
+        """
+        Process a chunk of events through the Memory Writer.
+
+        Args:
+            events: List of Event objects to process
+            project_id: Project identifier
+            owner_type: Owner type (user/team/org)
+            owner_id: Owner identifier
+            chunk_index: Index of this chunk (for logging)
+            carry_state: State carried from previous chunk
+            recent_memories: Existing memories for context
+
+        Returns:
+            MemoryWriterOutput with episodes, memories, and carry_state
+        """
+        if recent_memories is None:
+            recent_memories = []
+
+        events_json = json.dumps(events_to_json(events), indent=2)
+
+        ctx = ChunkContext(
+            events_json=events_json,
+            project_id=project_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            chunk_index=chunk_index,
+            carry_state=carry_state or "(none)",
+            recent_memories=self._format_memories(recent_memories),
+            max_memories_per_episode=self.config.max_memories_per_episode,
+        )
+
+        user_prompt = self._build_user_prompt(ctx)
+        result = await self._agent.run(user_prompt, deps=ctx)
+
+        return result.output
+
+    def process_chunk_sync(
+        self,
+        events: list[Event],
+        project_id: str,
+        owner_type: str = "user",
+        owner_id: str = "default",
+        chunk_index: int = 0,
+        carry_state: Optional[str] = None,
+        recent_memories: Optional[list[dict]] = None,
+    ) -> MemoryWriterOutput:
+        """Synchronous wrapper for process_chunk."""
+        if recent_memories is None:
+            recent_memories = []
+
+        events_json = json.dumps(events_to_json(events), indent=2)
+
+        ctx = ChunkContext(
+            events_json=events_json,
+            project_id=project_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            chunk_index=chunk_index,
+            carry_state=carry_state or "(none)",
+            recent_memories=self._format_memories(recent_memories),
+            max_memories_per_episode=self.config.max_memories_per_episode,
+        )
+
+        user_prompt = self._build_user_prompt(ctx)
+        result = self._agent.run_sync(user_prompt, deps=ctx)
+
+        return result.output
