@@ -94,7 +94,8 @@ Constraints: no secrets, no raw stack traces, favor stable over transient.
 | ADD | New information not in existing memories |
 | UPDATE | Existing memory needs modification (target_memory_id required) |
 | DEPRECATE | Existing memory is now wrong/outdated (target_memory_id required) |
-| IGNORE | Information not worth storing, or exact duplicate |
+
+Note: For information not worth storing, return empty memories array with discard_reason.
 
 ## Policy Constraints
 

@@ -94,7 +94,8 @@ Return JSON only:
       "ttl_days": 30 | null,
       "confidence": 0.0-1.0,
       "evidence": {{
-        "source": "failure_then_success | user_correction | explicit_statement",
+        "source": "failure_then_success | user_correction | explicit_statement |
+                   pattern_observed | guard_triggered",
         "frustration": "none | mild | moderate | severe"
       }}
     }}
