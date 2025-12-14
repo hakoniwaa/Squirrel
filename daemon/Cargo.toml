@@ -1,0 +1,47 @@
+[package]
+name = "sqrl"
+version = "0.1.0"
+edition = "2021"
+description = "Local-first memory system for AI coding tools"
+license = "MIT"
+repository = "https://github.com/kaminoguo/Squirrel"
+
+[[bin]]
+name = "sqrl"
+path = "src/main.rs"
+
+[dependencies]
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# SQLite with vector extension
+rusqlite = { version = "0.32", features = ["bundled"] }
+sqlite-vec = "0.1"
+
+# File watching
+notify = { version = "7", default-features = false, features = ["macos_kqueue"] }
+notify-debouncer-mini = "0.5"
+
+# MCP server
+rmcp = { version = "0.1", features = ["server", "transport-io"] }
+
+# JSON-RPC IPC
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "6"
+toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3"

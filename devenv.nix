@@ -78,7 +78,7 @@
       pytest tests/ -v
       if [ -d "daemon" ]; then
         echo "Running Rust tests..."
-        cargo test
+        cargo test --manifest-path daemon/Cargo.toml
       fi
     '';
 
@@ -89,14 +89,19 @@
 
     # Start daemon in development mode
     dev-daemon.exec = ''
-      cargo run --bin sqrl-daemon -- --dev
+      cargo run --manifest-path daemon/Cargo.toml daemon
+    '';
+
+    # Run Rust daemon CLI
+    sqrl.exec = ''
+      cargo run --manifest-path daemon/Cargo.toml -- "$@"
     '';
 
     # Format all code
     fmt.exec = ''
       ruff format src/ tests/
       if [ -d "daemon" ]; then
-        cargo fmt
+        cargo fmt --manifest-path daemon/Cargo.toml
       fi
     '';
 
@@ -104,7 +109,7 @@
     lint.exec = ''
       ruff check src/ tests/
       if [ -d "daemon" ]; then
-        cargo clippy -- -D warnings
+        cargo clippy --manifest-path daemon/Cargo.toml -- -D warnings
       fi
     '';
   };
