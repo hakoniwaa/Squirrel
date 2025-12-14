@@ -180,7 +180,6 @@ impl EventBuffer {
     }
 
     /// Get sessions that have pending events.
-    #[allow(dead_code)] // For IPC integration
     pub fn pending_sessions(&self) -> Vec<String> {
         self.sessions
             .iter()
@@ -225,7 +224,6 @@ impl EventBuffer {
     }
 
     /// Process response from Memory Service.
-    #[allow(dead_code)] // For IPC integration
     pub async fn process_response(
         &mut self,
         session_id: &str,
