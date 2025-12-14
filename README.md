@@ -5,7 +5,7 @@ Local-first memory system for AI coding tools. Learns from your coding sessions,
 ## What It Does
 
 ```
-You code with Claude Code / Cursor / Windsurf
+You code with Claude Code / Cursor / Codex CLI / Gemini CLI
                     ↓
     Squirrel watches logs (100% passive, invisible)
                     ↓
@@ -238,7 +238,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ## v1 Scope
 
-- Passive log watching (Claude Code, Cursor, Windsurf)
+- Passive log watching (Claude Code, Cursor, Codex CLI, Gemini CLI)
 - Memory Writer: single strong-model LLM call per episode
 - 5 memory kinds (preference, invariant, pattern, guard, note)
 - 3 tiers (short_term, long_term, emergency)
