@@ -62,6 +62,18 @@ pub struct LlmConfig {
 
     #[serde(default = "default_embedding_model")]
     pub embedding_model: String,
+
+    /// OpenRouter API key (for openrouter/* models)
+    #[serde(default)]
+    pub openrouter_api_key: String,
+
+    /// OpenAI API key (for openai/* models and embeddings)
+    #[serde(default)]
+    pub openai_api_key: String,
+
+    /// Anthropic API key (for anthropic/* models)
+    #[serde(default)]
+    pub anthropic_api_key: String,
 }
 
 impl Default for LlmConfig {
@@ -70,6 +82,9 @@ impl Default for LlmConfig {
             strong_model: default_strong_model(),
             fast_model: default_fast_model(),
             embedding_model: default_embedding_model(),
+            openrouter_api_key: String::new(),
+            openai_api_key: String::new(),
+            anthropic_api_key: String::new(),
         }
     }
 }
@@ -97,11 +112,11 @@ fn default_true() -> bool {
 }
 
 fn default_strong_model() -> String {
-    "anthropic/claude-sonnet-4-20250514".to_string()
+    "openrouter/google/gemini-3-pro-preview".to_string()
 }
 
 fn default_fast_model() -> String {
-    "anthropic/claude-haiku-3".to_string()
+    "openrouter/google/gemini-2.5-flash-preview".to_string()
 }
 
 fn default_embedding_model() -> String {

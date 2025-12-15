@@ -60,6 +60,14 @@ async fn main() -> Result<(), error::Error> {
         Commands::Daemon => {
             cli::daemon::run().await?;
         }
+        Commands::Clean {
+            project,
+            global,
+            all,
+            force,
+        } => {
+            cli::clean::run(project, global, all, force).await?;
+        }
     }
 
     Ok(())

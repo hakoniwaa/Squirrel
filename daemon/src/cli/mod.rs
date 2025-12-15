@@ -1,6 +1,7 @@
 //! CLI commands for Squirrel.
 
 pub mod agents;
+pub mod clean;
 pub mod config;
 pub mod daemon;
 pub mod export;
@@ -114,4 +115,23 @@ pub enum Commands {
 
     /// Run background daemon
     Daemon,
+
+    /// Remove Squirrel data
+    Clean {
+        /// Remove project .sqrl/ only
+        #[arg(long)]
+        project: bool,
+
+        /// Remove global ~/.sqrl/ only
+        #[arg(long)]
+        global: bool,
+
+        /// Remove both project and global
+        #[arg(long)]
+        all: bool,
+
+        /// Skip confirmation prompt
+        #[arg(long, short)]
+        force: bool,
+    },
 }

@@ -24,6 +24,18 @@ pub async fn run(key: Option<&str>, value: Option<&str>) -> Result<(), Error> {
             println!("  strong_model = {}", config.llm.strong_model);
             println!("  fast_model = {}", config.llm.fast_model);
             println!("  embedding_model = {}", config.llm.embedding_model);
+            println!(
+                "  openrouter_api_key = {}",
+                mask_key(&config.llm.openrouter_api_key)
+            );
+            println!(
+                "  openai_api_key = {}",
+                mask_key(&config.llm.openai_api_key)
+            );
+            println!(
+                "  anthropic_api_key = {}",
+                mask_key(&config.llm.anthropic_api_key)
+            );
             println!();
             println!("[daemon]");
             println!("  socket_path = {}", config.daemon.socket_path);
@@ -62,9 +74,22 @@ fn get_config_value(config: &Config, key: &str) -> Result<String, Error> {
         "llm.strong_model" => Ok(config.llm.strong_model.clone()),
         "llm.fast_model" => Ok(config.llm.fast_model.clone()),
         "llm.embedding_model" => Ok(config.llm.embedding_model.clone()),
+        "llm.openrouter_api_key" => Ok(mask_key(&config.llm.openrouter_api_key)),
+        "llm.openai_api_key" => Ok(mask_key(&config.llm.openai_api_key)),
+        "llm.anthropic_api_key" => Ok(mask_key(&config.llm.anthropic_api_key)),
         "daemon.socket_path" => Ok(config.daemon.socket_path.clone()),
         "daemon.log_level" => Ok(config.daemon.log_level.clone()),
         _ => Err(Error::InvalidConfig(format!("Unknown key: {}", key))),
+    }
+}
+
+fn mask_key(key: &str) -> String {
+    if key.is_empty() {
+        "(not set)".to_string()
+    } else if key.len() <= 8 {
+        "****".to_string()
+    } else {
+        format!("{}...{}", &key[..4], &key[key.len() - 4..])
     }
 }
 
@@ -79,6 +104,9 @@ fn set_config_value(config: &mut Config, key: &str, value: &str) -> Result<(), E
         "llm.strong_model" => config.llm.strong_model = value.to_string(),
         "llm.fast_model" => config.llm.fast_model = value.to_string(),
         "llm.embedding_model" => config.llm.embedding_model = value.to_string(),
+        "llm.openrouter_api_key" => config.llm.openrouter_api_key = value.to_string(),
+        "llm.openai_api_key" => config.llm.openai_api_key = value.to_string(),
+        "llm.anthropic_api_key" => config.llm.anthropic_api_key = value.to_string(),
         "daemon.socket_path" => config.daemon.socket_path = value.to_string(),
         "daemon.log_level" => config.daemon.log_level = value.to_string(),
         _ => return Err(Error::InvalidConfig(format!("Unknown key: {}", key))),
