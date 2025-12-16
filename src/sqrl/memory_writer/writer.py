@@ -17,7 +17,22 @@ from sqrl.parsers.base import Event
 SUPPORTED_PROVIDERS = {"openrouter", "openai", "anthropic", "ollama", "together", "fireworks"}
 
 # Default model when SQRL_STRONG_MODEL is not set
-DEFAULT_STRONG_MODEL = "openai/gpt-4o-mini"
+# Using DeepSeek R1 distilled model - free on OpenRouter with strong reasoning
+# Alternatives:
+#   - "openrouter/deepseek/deepseek-chat-v2.5" (free, 128K context)
+#   - "openrouter/anthropic/claude-3.5-haiku" ($0.80/$4 per M tokens, best for JSON)
+#   - "openrouter/deepseek/deepseek-r1" ($0.30/$1.20 per M tokens, advanced reasoning)
+#   - "anthropic/claude-3-5-haiku-latest" (direct Anthropic API)
+DEFAULT_STRONG_MODEL = "openrouter/deepseek/deepseek-r1-distill-qwen-32b"
+
+# Recommended models by use case (for documentation)
+RECOMMENDED_MODELS = {
+    "free_best": "openrouter/deepseek/deepseek-r1-distill-qwen-32b",  # Free, 64K, strong reasoning
+    "free_long_context": "openrouter/deepseek/deepseek-chat-v2.5",  # Free, 128K context
+    "budget": "openrouter/deepseek/deepseek-r1-0528-qwen3-8b",  # $0.02/$0.10, 33K
+    "json_best": "openrouter/anthropic/claude-3.5-haiku",  # $0.80/$4, 200K, best structured output
+    "reasoning": "openrouter/deepseek/deepseek-r1",  # $0.30/$1.20, 164K, o1-level reasoning
+}
 
 
 class ConfigurationError(Exception):
