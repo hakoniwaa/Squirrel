@@ -96,7 +96,6 @@ High-level system boundaries and data flow.
 
 **Never Contains:**
 - LLM API calls
-- Embedding generation
 - Tool interception
 
 ---
@@ -107,10 +106,9 @@ High-level system boundaries and data flow.
 
 | Module | Purpose | Model |
 |--------|---------|-------|
-| Log Cleaner | Remove noise, compress tokens | cheap (Haiku) |
-| Memory Extractor | Extract user style + project memory | strong (Sonnet) |
+| Log Cleaner | Remove noise, compress tokens | gemini-3.0-flash |
+| Memory Extractor | Extract user style + project memory | gemini-3.0-flash |
 | Style Syncer | Write user style to agent.md | N/A |
-| Embeddings | Generate vectors for semantic search | embedding model |
 
 **Owns:**
 - All LLM API calls
@@ -122,6 +120,7 @@ High-level system boundaries and data flow.
 - File watching
 - Direct database access (via IPC only)
 - MCP protocol
+- Embedding generation (v1 uses use_count ordering, no semantic search)
 
 ---
 

@@ -2,22 +2,24 @@
 
 All LLM prompts with stable IDs and model tier assignments.
 
-## Model Tiers
+## Model Configuration
 
-Squirrel uses a 2-tier model pipeline. All providers configured via LiteLLM.
+Squirrel uses Gemini 3.0 Flash for both stages. Configured via LiteLLM.
 
-| Tier | Purpose | Example Models |
-|------|---------|----------------|
-| cheap_model | Log Cleaner (compression, filtering) | Claude Haiku, GPT-4o-mini, Gemini Flash |
-| strong_model | Memory Extractor (core intelligence) | Claude Sonnet, GPT-4o, Gemini Pro |
+| Stage | Default Model |
+|-------|---------------|
+| Log Cleaner | `gemini/gemini-3.0-flash` |
+| Memory Extractor | `gemini/gemini-3.0-flash` |
 
-**Configuration:** Users set `SQRL_CHEAP_MODEL` and `SQRL_STRONG_MODEL` environment variables with LiteLLM model identifiers.
+**Configuration:** Users can override via `SQRL_CHEAP_MODEL` and `SQRL_STRONG_MODEL` environment variables.
+
+**No embedding model** - v1 uses simple use_count ordering, no semantic search.
 
 ---
 
 ## PROMPT-001: Log Cleaner
 
-**Model Tier:** cheap_model
+**Model:** `gemini/gemini-3.0-flash` (configurable via `SQRL_CHEAP_MODEL`)
 
 **ID:** PROMPT-001-LOG-CLEANER
 
@@ -78,7 +80,7 @@ Analyze and compress. Return JSON only.
 
 ## PROMPT-002: Memory Extractor
 
-**Model Tier:** strong_model (REQUIRED)
+**Model:** `gemini/gemini-3.0-flash` (configurable via `SQRL_STRONG_MODEL`)
 
 **ID:** PROMPT-002-MEMORY-EXTRACTOR
 

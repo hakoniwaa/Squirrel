@@ -69,7 +69,7 @@ Each developer's machine is the source of truth. Cloud features (team sync) are 
 | Component | Language | Responsibility | Boundary |
 |-----------|----------|----------------|----------|
 | Rust Daemon | Rust | Log watching, storage, MCP server, CLI | Never contains LLM logic |
-| Python Memory Service | Python | Log Cleaner, Memory Extractor, Style Syncer, embeddings | Never does file watching |
+| Python Memory Service | Python | Log Cleaner, Memory Extractor, Style Syncer | Never does file watching |
 | IPC | JSON-RPC 2.0 | Communication between daemon and service | Unix socket / named pipe |
 
 ---
@@ -82,7 +82,7 @@ Each developer's machine is the source of truth. Cloud features (team sync) are 
 | MCP SDK | rmcp (Rust) | Yes (v1) |
 | Agent Framework | PydanticAI | Yes (v1) |
 | LLM Client | LiteLLM | Yes (v1) |
-| Embeddings | API-based (OpenAI default) | Provider swappable |
+| Default LLM | Gemini 3.0 Flash | Configurable |
 
 ---
 

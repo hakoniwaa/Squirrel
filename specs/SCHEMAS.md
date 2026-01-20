@@ -51,7 +51,6 @@ CREATE TABLE project_memories (
   subcategory  TEXT NOT NULL DEFAULT 'main',  -- User-defined subcategory
   text         TEXT NOT NULL,             -- Memory content
   use_count    INTEGER DEFAULT 1,         -- Times reinforced/extracted
-  embedding    BLOB,                      -- Vector for semantic search (optional)
   created_at   TEXT NOT NULL,             -- ISO 8601
   updated_at   TEXT NOT NULL              -- ISO 8601
 );
@@ -75,7 +74,7 @@ CREATE INDEX idx_project_memories_use_count ON project_memories(use_count DESC);
 | category | subcategory | text |
 |----------|-------------|------|
 | backend | main | "Use httpx as HTTP client, not requests" |
-| backend | database | "PostgreSQL with pgvector for embeddings" |
+| backend | database | "PostgreSQL 16 for main database" |
 | frontend | main | "Component library uses shadcn/ui" |
 | docs_test | main | "Tests use pytest with fixtures in conftest.py" |
 
