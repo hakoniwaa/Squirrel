@@ -1,6 +1,6 @@
 # Squirrel
 
-Local-first memory system for AI coding tools. Learns from your coding sessions, providing personalized, task-aware context via MCP.
+Local-first memory system for AI coding tools. Learns from your coding sessions, syncs your style to agent config files, and provides project context via MCP.
 
 ## What It Does
 
@@ -9,55 +9,119 @@ You code with Claude Code / Cursor / Codex CLI / Gemini CLI
                     ↓
     Squirrel watches logs (100% passive, invisible)
                     ↓
-    Memory Writer analyzes episodes:
-      - What worked / what failed
-      - User preferences detected
-      - Project invariants discovered
-      - Patterns worth remembering
+    Memory pipeline:
+      1. Log Cleaner (cheap model) - compress, filter noise
+      2. Memory Extractor (strong model) - extract memories
                     ↓
-    Extracts memories (5 kinds):
-      preference (user style)
-      invariant (project facts)
-      pattern (reusable solutions)
-      guard (risk rules)
-      note (lightweight ideas)
+    Two types of memories:
+      User Style → synced to agent.md files
+      Project Memory → accessed via MCP
                     ↓
-    AI tools call MCP → get personalized context
-                    ↓
-          Better suggestions + avoid past mistakes
+    AI tools understand you and your project
 ```
+
+## What Squirrel Enables
+
+| Capability | Description |
+|------------|-------------|
+| **Personal coding style** | Vibe coding gradually learns your preferences. AI adapts to you, not the other way around. |
+| **Cross-CLI memory** | Switch between Claude Code, Cursor, Codex CLI, Gemini CLI - memories follow you. |
+| **Project awareness** | AI understands project history, architecture decisions, and current progress. |
+| **Team onboarding** | New members instantly benefit from accumulated project knowledge via AI. |
+| **Mistake prevention** | AI remembers past failures and avoids repeating them. |
+| **No repeated explanations** | Stop telling AI the same project conventions every session. |
+| **Knowledge retention** | Team members leave, project memory stays. |
+
+## Memory Types
+
+### User Style
+
+Personal development preferences that apply across ALL projects:
+
+| Example |
+|---------|
+| "Prefer async/await over callbacks" |
+| "Never use emoji in code or comments" |
+| "Commits should use minimal English" |
+| "AI should maintain critical, calm attitude" |
+
+**Storage:** `~/.sqrl/user_style.db`
+
+**Access:** Synced to agent.md files (CLAUDE.md, .cursorrules, etc.)
+
+### Project Memory
+
+Project-specific knowledge organized by category:
+
+| Category | Description |
+|----------|-------------|
+| `frontend` | UI framework, components, styling |
+| `backend` | API, database, services |
+| `docs_test` | Documentation, testing |
+| `other` | Everything else |
+
+**Storage:** `<repo>/.sqrl/memory.db`
+
+**Access:** Via MCP tool `squirrel_get_memory`
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        RUST DAEMON                              │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────────┐│
-│  │Log Watch │  │ SQLite   │  │MCP Server│  │   CLI Handler    ││
-│  │ (notify) │  │sqlite-vec│  │  (rmcp)  │  │     (clap)       ││
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────────┬─────────┘│
-│       │             │             │                 │          │
-│  ┌────┴─────┐  ┌────┴─────┐  ┌────┴─────┐                      │
-│  │  Guard   │  │  Commit  │  │Retrieval │                      │
-│  │Intercept │  │  Layer   │  │ Engine   │                      │
-│  └──────────┘  └──────────┘  └──────────┘                      │
-│                            ↕ SQLite                            │
-└─────────────────────────────────────────────────────────────────┘
-                             ↕ Unix socket (JSON-RPC 2.0)
-┌─────────────────────────────────────────────────────────────────┐
-│                   PYTHON MEMORY SERVICE                         │
-│  ┌───────────────────────────────────────────────────────────┐ │
-│  │                    Memory Writer                          │ │
-│  │  - Single strong-model call per episode                   │ │
-│  │  - Returns ops[] (ADD/UPDATE/DEPRECATE)                   │ │
-│  └───────────────────────────────────────────────────────────┘ │
-│  ┌──────────────────┐  ┌──────────────────┐                    │
-│  │    Retrieval     │  │    CR-Memory     │                    │
-│  │  (embed_text)    │  │  (background)    │                    │
-│  └──────────────────┘  └──────────────────┘                    │
-│                            ↕ LiteLLM                           │
-└─────────────────────────────────────────────────────────────────┘
-                             ↕ HTTPS
+│                        User's Machine                            │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐       │
+│  │ Claude Code  │    │    Cursor    │    │  Codex CLI   │       │
+│  └──────┬───────┘    └──────┬───────┘    └──────┬───────┘       │
+│         │                   │                   │                │
+│         └─────────┬─────────┴─────────┬─────────┘                │
+│                   │                   │                          │
+│                   ▼                   ▼                          │
+│         ┌─────────────────┐  ┌─────────────────┐                 │
+│         │   Log Files     │  │   MCP Client    │                 │
+│         │ (watched)       │  │   (manual)      │                 │
+│         └────────┬────────┘  └────────┬────────┘                 │
+│                  │                    │                          │
+│                  ▼                    ▼                          │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │                    RUST DAEMON                             │  │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │  │
+│  │  │ Log Watcher │  │ MCP Server  │  │ CLI Handler │        │  │
+│  │  │   (notify)  │  │   (rmcp)    │  │  (clap)     │        │  │
+│  │  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘        │  │
+│  │         │                │                │               │  │
+│  │         └────────────────┼────────────────┘               │  │
+│  │                          ▼                                │  │
+│  │                 ┌─────────────────┐                       │  │
+│  │                 │     SQLite      │                       │  │
+│  │                 │  + sqlite-vec   │                       │  │
+│  │                 └─────────────────┘                       │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                              │                                   │
+│                              │ Unix Socket (JSON-RPC 2.0)        │
+│                              ▼                                   │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │               PYTHON MEMORY SERVICE                        │  │
+│  │  ┌─────────────────────────────────────────────────────┐  │  │
+│  │  │                  Log Cleaner                         │  │  │
+│  │  │  - Cheap model (Haiku/GPT-4o-mini)                  │  │  │
+│  │  │  - Removes noise, compresses tokens                  │  │  │
+│  │  └─────────────────────────────────────────────────────┘  │  │
+│  │  ┌─────────────────────────────────────────────────────┐  │  │
+│  │  │                  Memory Extractor                    │  │  │
+│  │  │  - Strong model (Sonnet/GPT-4o)                     │  │  │
+│  │  │  - Extracts user style + project memory             │  │  │
+│  │  └─────────────────────────────────────────────────────┘  │  │
+│  │  ┌─────────────────────────────────────────────────────┐  │  │
+│  │  │                  Style Syncer                        │  │  │
+│  │  │  - Writes user style to agent.md files              │  │  │
+│  │  └─────────────────────────────────────────────────────┘  │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                              │                                   │
+└──────────────────────────────┼───────────────────────────────────┘
+                               │ HTTPS
+                               ▼
                     ┌─────────────────────┐
                     │    LLM Providers    │
                     │ (Anthropic/OpenAI)  │
@@ -66,149 +130,113 @@ You code with Claude Code / Cursor / Codex CLI / Gemini CLI
 
 | Component | Language | Role |
 |-----------|----------|------|
-| **Rust Daemon** | Rust | Log watcher, SQLite + sqlite-vec, MCP server, CLI, guard interception |
-| **Python Memory Service** | Python | Memory Writer (LLM), embeddings, CR-Memory evaluation |
-
-### Technology Stack
-
-| Layer | Technology | Notes |
-|-------|------------|-------|
-| **Storage** | SQLite + sqlite-vec | Local-first, vector search |
-| **IPC** | JSON-RPC 2.0 over Unix socket | Daemon ↔ Memory Service |
-| **MCP SDK** | rmcp (official Rust SDK) | modelcontextprotocol/rust-sdk |
-| **Agent Framework** | PydanticAI + LiteLLM | Multi-provider LLM support |
-| **Embeddings** | OpenAI text-embedding-3-small | 1536-dim, API-based |
-| **Build/Release** | cargo-dist | Generates Homebrew, MSI, installers |
-| **Auto-update** | axoupdater | dist's official updater |
+| **Rust Daemon** | Rust | Log watcher, SQLite + sqlite-vec, MCP server, CLI |
+| **Python Memory Service** | Python | Log Cleaner, Memory Extractor, Style Syncer |
 
 ## Quick Start
 
 ```bash
-# Install (detects OS automatically)
-curl -sSL https://sqrl.dev/install.sh | sh
-
 # Initialize a project
 cd ~/my-project
 sqrl init
 
-# Search memories
-sqrl search "database patterns"
+# Initialize with historical log processing
+sqrl init --history 30    # Process last 30 days
+sqrl init --history all   # Process all history
 
 # Check status
 sqrl status
+
+# Open Dashboard
+sqrl
 ```
 
-## Memory Kinds
+## CLI Commands
 
-| Kind | Purpose | Example |
-|------|---------|---------|
-| `preference` | User style/interaction preferences | "User prefers async/await over callbacks" |
-| `invariant` | Stable project facts / architectural decisions | "This project uses httpx as HTTP client" |
-| `pattern` | Reusable debugging or design patterns | "SSL errors with requests → switch to httpx" |
-| `guard` | Risk rules ("don't do X", "ask before Y") | "Don't retry requests with SSL errors" |
-| `note` | Lightweight notes / ideas / hypotheses | "Consider migrating to FastAPI v1.0" |
+| Command | Purpose |
+|---------|---------|
+| `sqrl` | Open Dashboard in browser |
+| `sqrl init` | Initialize project (watch future logs only) |
+| `sqrl init --history <days\|all>` | Initialize + process historical logs |
+| `sqrl status` | Show daemon status and stats |
 
-### Memory Tiers
+All other operations (edit, delete, search) happen in Dashboard.
 
-| Tier | Purpose | Behavior |
-|------|---------|----------|
-| `short_term` | Trial memories, may expire | Default for new memories |
-| `long_term` | Validated, stable memories | Promoted after proving value |
-| `emergency` | High-severity guards | Affects tool execution (blocks dangerous actions) |
+## MCP Tool
 
-### Memory Lifecycle
-
-```
-New memory created → status: provisional, tier: short_term
-        ↓
-CR-Memory evaluates (use_count, opportunities, regret_hits)
-        ↓
-If proves value → status: active, maybe tier: long_term
-If never used → status: deprecated
+```json
+{
+  "name": "squirrel_get_memory",
+  "description": "Get project memories from Squirrel"
+}
 ```
 
-## Key Concepts
+Returns all project memories grouped by category:
 
-### P1: Future-Impact
+```markdown
+## frontend
+- Component library uses shadcn/ui
+- State management with Zustand
 
-Memory value = regret reduction in future episodes. A memory is valuable only if it helps later - reducing repeated bugs, confusion, or wasted tokens.
+## backend
+- Use httpx as HTTP client
+- API uses FastAPI with Pydantic models
 
-### P2: AI-Primary
+## docs_test
+- Tests use pytest with fixtures in conftest.py
 
-The Memory Writer is the decision-maker, not a form-filler. It decides what to extract, how to phrase it, what operations to perform.
-
-### P3: Declarative
-
-We declare objectives and constraints. The LLM + CR-Memory evaluation loop discover the policy.
-
-## Guard Interception
-
-Emergency guards can block dangerous tool calls without LLM latency:
-
+## other
+- Deploy via GitHub Actions to Vercel
 ```
-Memory Writer creates guard:
-  "Don't retry requests with SSL errors"
-  guard_pattern: {tool: ["Bash"], command_contains: ["requests"], recent_errors_contains: ["SSLError"]}
-        ↓
-Daemon about to execute Bash command
-        ↓
-Guard pattern matches → block/warn/prompt user
-        ↓
-No LLM call needed (<5ms)
+
+## Agent File Integration
+
+Squirrel manages a block in agent config files:
+
+```markdown
+<!-- START Squirrel User Style -->
+## Development Style (managed by Squirrel)
+
+- Prefer async/await over callbacks
+- Never use emoji in code or comments
+- Commits should use minimal English
+- AI should maintain critical, calm attitude
+
+<!-- END Squirrel User Style -->
 ```
+
+Supported files:
+
+| Tool | File |
+|------|------|
+| Claude Code | `~/.claude/CLAUDE.md`, `<repo>/CLAUDE.md` |
+| Cursor | `~/.cursor/rules/*.mdc`, `<repo>/.cursorrules` |
+| Codex CLI | `~/.codex/instructions.md` |
+| Gemini CLI | `~/.gemini/instructions.md` |
 
 ## Storage
 
 ```
 ~/.sqrl/
-├── config.toml                 # User settings
-├── squirrel.db                 # Global memories (preferences)
-└── logs/                       # Daemon logs
+├── user_style.db              # Personal development style
 
 <repo>/.sqrl/
-├── squirrel.db                 # Project memories (invariants, patterns, guards)
-└── memory_policy.toml          # Policy overrides (optional)
+├── memory.db                  # Project-specific memories
 ```
 
-## Configuration
+## Dashboard
 
-```toml
-# ~/.sqrl/config.toml
+Web UI for managing memories:
 
-[llm]
-provider = "anthropic"          # anthropic | openai | gemini | ollama | ...
-
-# 2-tier model design (via LiteLLM)
-strong_model = "claude-sonnet-4-20250514"   # Memory Writer
-fast_model = "claude-haiku"                  # Embeddings, context compose
-
-[embedding]
-provider = "openai"
-model = "text-embedding-3-small"
-
-[daemon]
-idle_timeout_hours = 2
-```
-
-## MCP Tools
-
-| Tool | Purpose |
-|------|---------|
-| `squirrel_get_task_context` | Get relevant memories for current task |
-| `squirrel_search_memory` | Semantic search across memories |
-| `squirrel_report_outcome` | Report task success/failure for CR-Memory |
-
-## CLI Commands
-
-```bash
-sqrl init                       # Initialize project
-sqrl search "query"             # Search memories
-sqrl status                     # Show stats
-sqrl forget <id|query>          # Delete memory
-sqrl flush                      # Force episode processing
-sqrl export [--kind <kind>]     # Export memories
-sqrl policy                     # Show/edit memory policy
-```
+| Feature | Free | Team (B2B) |
+|---------|------|------------|
+| View/edit personal style | ✓ | ✓ |
+| View/edit project memory | ✓ | ✓ |
+| Memory categories management | ✓ | ✓ |
+| Team style management | - | ✓ |
+| Team member management | - | ✓ |
+| Cloud sync | - | ✓ |
+| Activity analytics | - | ✓ |
 
 ## Development Setup
 
@@ -236,24 +264,28 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
+## Design Principles
+
+| Principle | Description |
+|-----------|-------------|
+| **Simple** | use_count based ordering. No complex evaluation loops. |
+| **AI-Primary** | LLM decides what to extract, not hardcoded rules. |
+| **Passive** | Daemon watches logs, never intercepts. |
+| **Distributed-first** | All extraction happens locally. |
+
 ## v1 Scope
 
 - Passive log watching (Claude Code, Cursor, Codex CLI, Gemini CLI)
-- Memory Writer: single strong-model LLM call per episode
-- 5 memory kinds (preference, invariant, pattern, guard, note)
-- 3 tiers (short_term, long_term, emergency)
-- Status lifecycle: provisional → active → deprecated
-- CR-Memory: background promotion/deprecation based on usage
-- Guard interception: deterministic pattern matching (<5ms)
-- Declarative keys for fast lookup (project.*, user.*)
-- MCP integration
+- 2-stage model pipeline (Log Cleaner + Memory Extractor)
+- User style synced to agent.md files
+- Project memory via MCP
+- 4 default categories (frontend, backend, docs_test, other)
+- Dashboard for management
 - Cross-platform (Mac, Linux, Windows)
 
-**v2:** Team/cloud sync, multi-IDE support, web UI
+**v2:** Team/cloud sync, shared memories, analytics
 
 ## Contributing
-
-See `specs/CONTRIBUTING.md` for guidelines.
 
 1. Fork and clone
 2. Create branch: `git checkout -b yourname/feat-description`

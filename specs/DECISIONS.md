@@ -25,7 +25,7 @@ Need a system that watches files, serves MCP, and runs LLM operations. Single la
 - Pure Python: File watching unreliable, MCP SDK less mature
 
 **Decision:**
-Split into Rust daemon (I/O, storage, MCP) and Python agent (LLM operations). Communicate via JSON-RPC over Unix socket.
+Split into Rust daemon (I/O, storage, MCP) and Python Memory Service (LLM operations). Communicate via JSON-RPC over Unix socket.
 
 **Consequences:**
 - (+) Best libraries for each domain
@@ -86,50 +86,28 @@ Use PydanticAI for all agent implementations.
 
 ---
 
-## ADR-004: 2-Tier LLM Strategy
+## ADR-004: 2-Tier Model Pipeline
 
 **Status:** accepted
 **Date:** 2024-11-23
+**Updated:** 2025-01-20
 
 **Context:**
-Different operations have different accuracy/speed requirements:
-- Memory extraction: Needs quality, can be slow
-- Context composition: Needs speed, simpler task
+Different operations have different accuracy/cost requirements:
+- Log cleaning: Simple task, needs to be cheap
+- Memory extraction: Core intelligence, needs quality
 
 **Decision:**
 Use two model tiers:
-- `strong_model`: Complex extraction (default: Claude Sonnet)
-- `fast_model`: Quick operations (default: Claude Haiku)
+- `cheap_model`: Log Cleaner (default: Claude Haiku)
+- `strong_model`: Memory Extractor (default: Claude Sonnet)
 
 **Consequences:**
-- (+) Cost optimization
-- (+) Latency optimization for simple tasks
-- (+) Provider flexibility
+- (+) Cost optimization (cheap model for filtering)
+- (+) Quality where it matters (strong model for extraction)
+- (+) Provider flexibility via LiteLLM
+- (-) Need to maintain two prompts
 - (-) Configuration complexity
-- (-) Need to maintain two sets of prompts
-
----
-
-## ADR-005: Declarative Keys for Facts
-
-**Status:** superseded by ADR-010
-**Date:** 2024-11-23
-
-**Context:**
-Facts like "project uses PostgreSQL" can change. Need conflict detection:
-- Pure semantic: LLM compares all facts, expensive
-- Pure rule-based: Miss semantic conflicts
-- Hybrid: Declarative keys for common facts, LLM for rest
-
-**Decision:**
-Use declarative keys (e.g., `project.db.engine`) for deterministic conflict resolution. Fall back to LLM for unkeyed facts.
-
-**Consequences:**
-- (+) Fast conflict detection for common facts
-- (+) No LLM call for key-value changes
-- (+) Predictable behavior
-- (-) Need to maintain key registry
-- (-) Some facts don't fit key-value model
 
 ---
 
@@ -181,49 +159,19 @@ Adopt spec-driven development. All behavior defined in specs/ before implementat
 
 ---
 
-## ADR-008: Frustration Detection for Memory Importance
-
-**Status:** superseded by ADR-010
-**Date:** 2024-11-23
-
-**Context:**
-Some memories are more important than others. User frustration signals high-value learning:
-- Swearing after bug fix: Important lesson
-- "Finally!" after struggle: Key breakthrough
-- Neutral tone: Standard importance
-
-**Decision:**
-Detect frustration signals in episodes and boost memory importance accordingly.
-
-| Frustration Level | Signals | Importance Boost |
-|-------------------|---------|------------------|
-| severe | swearing, rage | critical |
-| moderate | "finally", "ugh", 3+ retries | high |
-| mild | sigh, minor complaint | medium |
-| none | neutral | based on content |
-
-**Consequences:**
-- (+) Better prioritization of valuable memories
-- (+) Learns from user pain points
-- (+) Passive, no user action needed
-- (-) May misinterpret sarcasm/humor
-- (-) Cultural differences in expression
-
----
-
 ## ADR-009: Unix Socket for IPC
 
 **Status:** accepted
 **Date:** 2024-11-20
 
 **Context:**
-Daemon and agent need to communicate. Options:
+Daemon and Memory Service need to communicate. Options:
 - HTTP: Works but overhead for local
 - gRPC: Complex setup for simple RPC
 - Unix socket: Fast, secure, local-only
 
 **Decision:**
-Use Unix socket at `/tmp/sqrl_agent.sock` with JSON-RPC 2.0 protocol. Windows uses named pipes.
+Use Unix socket at `/tmp/sqrl.sock` with JSON-RPC 2.0 protocol. Windows uses named pipes.
 
 **Consequences:**
 - (+) No network exposure
@@ -234,90 +182,162 @@ Use Unix socket at `/tmp/sqrl_agent.sock` with JSON-RPC 2.0 protocol. Windows us
 
 ---
 
-## ADR-010: AI-Primary Memory Architecture (v1 Redesign)
+## ADR-012: Simplified Memory Architecture (v1 Redesign)
 
 **Status:** accepted
-**Date:** 2024-12-11
+**Date:** 2025-01-20
 
 **Context:**
-The original memory architecture (lesson/fact/profile types, PROMPT-001-A/B two-stage extraction, importance/support_count heuristics, frustration-based importance boosting) was too rigid and rule-based. Problems:
+The original memory architecture was too complex:
+- CR-Memory with opportunities, regret_hits, promotion/deprecation logic
+- 5 memory kinds (preference, invariant, pattern, guard, note)
+- 3 tiers (short_term, long_term, emergency)
+- Guard interception for tool blocking
+- Complex status lifecycle (provisional → active → deprecated)
+- Declarative keys for conflict resolution
 
-- LLM filling forms instead of deciding
-- 20+ field schema with redundant columns
-- Importance derived from frustration heuristics, not actual future value
-- Two-stage LLM pipeline (extractor + manager) was complex
-- No way to measure if memories actually helped in future sessions
-
-After studying reference implementations (claude-mem, mcp-memory-service, langmem) and iterating on design with GPT collaboration, a new architecture was developed.
+This complexity was premature. We needed to simplify for v1.
 
 **Decision:**
-Adopt AI-primary, future-impact, declarative memory architecture:
+Adopt simplified architecture with two memory types:
 
-| Principle | Old | New |
-|-----------|-----|-----|
-| Memory creation | LLM fills structured form | LLM decides what/how/where |
-| Value signal | frustration → importance | future opportunities/uses → promotion |
-| Pipeline | 2-stage (extract + manage) | 1-stage (Memory Writer) |
-| Retention | support_count + time decay | CR-Memory opportunity-based evaluation |
-| Schema | 20+ fields, rigid types | Minimal fields, flexible kinds |
+| Type | Storage | Access | Purpose |
+|------|---------|--------|---------|
+| User Style | `~/.sqrl/user_style.db` | Synced to agent.md files | Personal development preferences |
+| Project Memory | `<repo>/.sqrl/memory.db` | MCP tool | Project-specific knowledge |
 
-**Key Changes:**
+Key simplifications:
 
-1. **New Memory Kinds**: Replace lesson/fact/profile with preference, invariant, pattern, guard, note
-2. **New Tiers**: short_term, long_term, emergency (guards affect tool execution)
-3. **Status Lifecycle**: provisional → active → deprecated (based on CR-Memory evaluation)
-4. **Memory Writer**: Single strong-model LLM call per episode, outputs ops array
-5. **CR-Memory**: Background job promoting/deprecating based on use_count, opportunities, regret_hits
-6. **Policy-driven**: memory_policy.toml declares thresholds, LLM + CR-Memory implement behavior
-7. **Guards**: Memories with `kind='guard'` and `polarity=-1` for "don't do X" knowledge (soft enforcement via context injection)
+| Old | New |
+|-----|-----|
+| CR-Memory evaluation | Simple use_count ordering |
+| 5 kinds, 3 tiers | No kinds/tiers, just text |
+| Guard interception | Removed (v2 maybe) |
+| Declarative keys | Removed |
+| Complex status lifecycle | No status field |
+| Context composition | Removed (return all memories) |
 
-**Supersedes:**
-- ADR-005: Declarative keys still exist but LLM decides when to use them
-- ADR-008: Frustration stored in evidence table but doesn't determine importance
+**Memory retrieval:**
+- MCP tool returns ALL project memories grouped by category
+- Ordered by use_count DESC within each category
+- No semantic search, no filtering
+
+**Model pipeline:**
+1. Log Cleaner (cheap model) - compress, decide if worth processing
+2. Memory Extractor (strong model) - extract user styles + project memories
 
 **Consequences:**
-- (+) LLM uses judgment instead of filling forms
-- (+) Memories prove value through actual usage, not heuristics
-- (+) Simpler schema, fewer fields to maintain
-- (+) Guards inform AI of anti-patterns via context injection (soft enforcement)
-- (+) Declarative policy allows tuning without code changes
-- (-) CR-Memory requires enough opportunities before promotion (cold start)
-- (-) estimated_regret_saved is heuristic (v1), not causal
-- (-) Need to migrate existing memories from old schema
+- (+) Much simpler to implement and maintain
+- (+) Easier to understand and debug
+- (+) Less API cost (no complex evaluation)
+- (+) Faster cold start (no bootstrapping period)
+- (-) No intelligent context selection
+- (-) May include irrelevant memories
+- (-) No guard protection against dangerous actions
+
+**Supersedes:**
+- ADR-005: Declarative Keys (removed)
+- ADR-008: Frustration Detection (removed)
+- ADR-010: AI-Primary Memory Architecture (replaced by this simpler version)
+- ADR-011: Historical Timeline (no longer needed without CR-Memory)
 
 ---
 
-## ADR-011: Historical Timeline Start Point for sqrl init
+## ADR-013: B2B Focus with B2D Open Source
 
 **Status:** accepted
-**Date:** 2025-12-13
+**Date:** 2025-01-20
 
 **Context:**
-`sqrl init` processes historical CLI logs to bootstrap memories. A key question: what is the "start point" for CR-Memory timeline evaluation?
-
-Options considered:
-1. **Today's date**: Start from now, all historical memories begin as short_term
-2. **Earliest session log**: Start from first log file, process chronologically
-
-Problem with option 1: If init creates memories and they all start as short_term with zero opportunities, they must wait for future sessions to prove value. This defeats Squirrel's advantage - we already HAVE the future sessions in the logs.
+Need to determine business model and feature prioritization.
 
 **Decision:**
-Use the **earliest session log timestamp** as the timeline start point for `sqrl init`.
+B2B (Business to Business) is the main focus. B2D (Business to Developer) is the open source layer.
 
-| Aspect | Behavior |
-|--------|----------|
-| Timeline origin | Timestamp of earliest log file for project |
-| Processing order | Chronological (oldest → newest) |
-| CR-Memory simulation | Each episode evaluates against memories from previous episodes |
-| Tier assignment | Memories earn long_term tier during init if proven valuable |
+| Tier | Features | Monetization |
+|------|----------|--------------|
+| Free (B2D) | Local memory extraction, MCP access, Dashboard | Open source |
+| Team (B2B) | Team style sync, shared project memory, analytics | Cloud subscription |
+
+Team features require cloud service for sync and management.
 
 **Consequences:**
-- (+) Memories can immediately earn long_term tier based on historical evidence
-- (+) Squirrel's competitive advantage: instant value, no cold start
-- (+) Users get useful memories from first query after init
-- (+) Full retroactive regret measurement against actual history
-- (-) Longer init time (must process all episodes sequentially)
-- (-) More complex init logic (simulate CR-Memory at each episode boundary)
+- (+) Clear monetization path
+- (+) Open source builds community
+- (+) Team features justify cloud service
+- (-) Need to build and maintain cloud infrastructure
+- (-) Must ensure free tier is genuinely useful
+
+---
+
+## ADR-014: Minimal CLI Commands
+
+**Status:** accepted
+**Date:** 2025-01-20
+
+**Context:**
+Previous design had many CLI commands (search, forget, export, flush, policy). With Dashboard for editing, most CLI commands are unnecessary.
+
+**Decision:**
+Reduce CLI to three commands:
+
+| Command | Purpose |
+|---------|---------|
+| `sqrl` | Open Dashboard in browser |
+| `sqrl init [--history <days\|all>]` | Initialize project |
+| `sqrl status` | Show daemon status |
+
+All other operations (edit, delete, search) happen in Dashboard.
+
+**Consequences:**
+- (+) Simpler CLI, less code to maintain
+- (+) Dashboard provides better UX for editing
+- (+) Consistent experience across operations
+- (-) No quick command-line memory search
+- (-) Requires browser for management
+
+---
+
+## ADR-015: Category-Based Project Memory Organization
+
+**Status:** accepted
+**Date:** 2025-01-20
+
+**Context:**
+Project memories need organization. Options:
+- Flat list: Simple but hard to navigate
+- By role (engineering, product, design): Overlapping concerns
+- By project composition (frontend, backend, etc.): Natural fit
+
+**Decision:**
+Organize project memories by 4 default categories:
+
+| Category | Description |
+|----------|-------------|
+| frontend | UI framework, components, styling |
+| backend | API, database, services |
+| docs_test | Documentation, testing |
+| other | Everything else |
+
+Users can add custom subcategories via Dashboard.
+
+**Consequences:**
+- (+) Natural organization for most projects
+- (+) Simple to understand and use
+- (+) MCP can return all grouped by category
+- (-) May not fit all project types
+- (-) Need subcategories for complex projects
+
+---
+
+## Deprecated ADRs
+
+| ADR | Status | Reason |
+|-----|--------|--------|
+| ADR-005 | superseded | Declarative keys removed in ADR-012 |
+| ADR-008 | superseded | Frustration detection removed in ADR-012 |
+| ADR-010 | superseded | Replaced by simpler ADR-012 |
+| ADR-011 | superseded | No longer needed without CR-Memory |
 
 ---
 
@@ -327,35 +347,4 @@ Use the **earliest session log timestamp** as the timeline start point for `sqrl
 |-------|---------|----------|
 | Team sync backend | Supabase / Custom / None | v2 |
 | Local LLM support | Ollama / llama.cpp / None | v2 |
-| Web UI | None / Tauri / Electron | v2 |
-
----
-
-## Future: v2 Team/Cloud Architecture
-
-Reference architecture for team memory sharing (not in v1 scope). See V1_ARCHITECTURE_REDESIGN.md section 6 for details.
-
-### Database Architecture (v2)
-
-| Layer | Scope | Owner | Storage |
-|-------|-------|-------|---------|
-| Local | global, project | user | `~/.sqrl/squirrel.db`, `<repo>/.sqrl/squirrel.db` |
-| Cloud | global, project | team, org | Cloud service (multi-tenant) |
-
-v1 schema already includes `owner_type` (user/team/org) and `owner_id` fields.
-
-### Multi-CLI / Multi-IDE (v2)
-
-Same memory engine, multiple clients:
-- MCP adapter for Claude Code (existing)
-- VS Code / Cursor / Windsurf / Codex CLI integrations
-- Each integration translates its logs into episodes format
-
-### Team Commands (v2)
-
-```bash
-sqrl team join <team-id>      # Join team, start syncing
-sqrl team leave               # Leave team
-sqrl share <memory-id>        # Promote user memory to team
-sqrl team export              # Export team memories to local
-```
+| Dashboard hosting | Local / Cloud / Hybrid | v1 |

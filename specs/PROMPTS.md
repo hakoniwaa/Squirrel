@@ -4,523 +4,284 @@ All LLM prompts with stable IDs and model tier assignments.
 
 ## Model Tiers
 
-Squirrel uses a 2-tier LLM strategy. **All providers are configured via LiteLLM, making model selection provider-agnostic.**
+Squirrel uses a 2-tier model pipeline. All providers configured via LiteLLM.
 
 | Tier | Purpose | Example Models |
 |------|---------|----------------|
-| strong_model | Memory Writer (core intelligence) | Claude Opus, GPT-4o, Gemini Pro |
-| fast_model | Context composition, CLI commands | Claude Haiku, GPT-4o-mini, Gemini Flash |
+| cheap_model | Log Cleaner (compression, filtering) | Claude Haiku, GPT-4o-mini, Gemini Flash |
+| strong_model | Memory Extractor (core intelligence) | Claude Sonnet, GPT-4o, Gemini Pro |
 
-**Configuration:** Users set `SQRL_STRONG_MODEL` and `SQRL_FAST_MODEL` environment variables with LiteLLM model identifiers. See [LiteLLM docs](https://docs.litellm.ai/docs/providers) for supported providers.
-
-**Critical:** Memory Writer MUST use a strong model. Using a weak model degrades everything downstream.
+**Configuration:** Users set `SQRL_CHEAP_MODEL` and `SQRL_STRONG_MODEL` environment variables with LiteLLM model identifiers.
 
 ---
 
-## PROMPT-001: Memory Writer
+## PROMPT-001: Log Cleaner
 
-**Model Tier:** strong_model (REQUIRED)
+**Model Tier:** cheap_model
 
-**ID:** PROMPT-001-MEMORY-WRITER
+**ID:** PROMPT-001-LOG-CLEANER
 
-**Purpose:** Single prompt that:
-1. Detects episode boundaries within event chunks
-2. Decides what to remember from each episode
-3. Manages carry-over state between chunks
-
-Replaces rule-based episode detection. AI decides everything (P2: AI-Primary).
-
-**Chunking Strategy:**
-- Chunk size: ? events (TBD via testing)
-- Overlap: ? events (TBD via testing)
-- Chunking is purely an engineering constraint (context limits)
-- Memory Writer decides semantic boundaries (episodes)
+**Purpose:**
+1. Compress episode events to reduce tokens
+2. Remove noise and redundant information
+3. Decide if episode is worth processing (skip trivial browsing)
 
 **Input Variables:**
 
 | Variable | Type | Description |
 |----------|------|-------------|
-| events | array | Raw event list from chunk |
-| carry_state | string/null | State carried from previous chunk (null for first) |
-| recent_memories | array | Relevant existing memories for context |
+| events | array | Raw event list from episode |
 | project_id | string | Project identifier |
-| owner_type | string | `user`, `team`, or `org` |
-| owner_id | string | Owner identifier |
-| policy_hints | object | Policy constraints (max_memories_per_episode: ?) |
 
 **System Prompt:**
 ```
-You are the Memory Writer for Squirrel, a coding memory system.
+You are the Log Cleaner for Squirrel, a coding memory system.
 
-## Core Principles
+Your job:
+1. Compress the episode events into a concise summary
+2. Remove noise: repeated errors, verbose outputs, browsing sequences
+3. Decide if this episode contains anything worth remembering
 
-P1: FUTURE-IMPACT
-Memory value = regret reduction in future episodes.
-A memory is valuable only if it helps in future sessions - reducing repeated bugs, repeated confusion, or wasted tokens.
-Not because it came from frustration. Not because the outcome was success/failure. Because it will actually help later.
+An episode is WORTH processing if it contains:
+- User corrections or preferences expressed
+- Debugging with clear resolution
+- Architectural decisions
+- Repeated patterns or anti-patterns
+- User frustration with clear cause
 
-P2: AI-PRIMARY
-You are the decision-maker, not a form-filler.
-You decide what to extract, how to phrase it, what operations to perform.
-There are no rigid rules like "frustration=severe → importance=critical".
+An episode should be SKIPPED if it's:
+- Pure browsing (listing files, reading code)
+- Trivial one-line fixes
+- No decisions, no learnings
 
-P3: DECLARATIVE
-The system declares objectives and constraints. You implement the behavior.
-Objectives: minimize repeated debugging, minimize re-explaining preferences, avoid re-discovering invariants.
-Constraints: no secrets, no raw stack traces, favor stable over transient.
+OUTPUT (JSON only):
+{
+  "skip": true | false,
+  "skip_reason": "string if skip=true, else null",
+  "compressed_events": "compressed summary of the episode if skip=false"
+}
 
-## Memory Kinds
+Be aggressive about compression. Keep only what's useful for memory extraction.
+```
 
-| Kind | Purpose | Example |
-|------|---------|---------|
-| preference | User style/interaction preferences | "User prefers async/await over callbacks" |
-| invariant | Stable project facts / architectural decisions | "This project uses httpx as HTTP client" |
-| pattern | Reusable debugging or design patterns | "SSL errors with requests → switch to httpx" |
-| guard | Risk rules ("don't do X", "ask before Y") | "Don't retry requests with SSL errors" |
-| note | Lightweight notes / ideas / hypotheses | "Consider migrating to FastAPI v1.0" |
+**User Prompt Template:**
+```
+PROJECT: {project_id}
 
-## Memory Tiers
+EVENTS:
+{events}
 
-| Tier | Purpose | When to Use |
-|------|---------|-------------|
-| short_term | Trial memories, may expire | Default for new memories |
-| long_term | Validated, stable memories | Only for proven invariants/preferences |
-| emergency | High-severity guards | Affects tool execution, not just context |
+Analyze and compress. Return JSON only.
+```
+
+---
+
+## PROMPT-002: Memory Extractor
+
+**Model Tier:** strong_model (REQUIRED)
+
+**ID:** PROMPT-002-MEMORY-EXTRACTOR
+
+**Purpose:** Extract user styles and project memories from cleaned episodes.
+
+**Input Variables:**
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| compressed_events | string | Output from Log Cleaner |
+| project_id | string | Project identifier |
+| project_root | string | Absolute path to project |
+| existing_user_styles | array | Current user style items |
+| existing_project_memories | array | Current project memories by category |
+
+**System Prompt:**
+```
+You are the Memory Extractor for Squirrel, a coding memory system.
+
+## Your Job
+
+Extract two types of memories from coding episodes:
+
+### 1. User Styles (Personal Preferences)
+
+Development style preferences that apply across ALL projects:
+- Coding style preferences ("prefer async/await over callbacks")
+- Communication preferences ("never use emoji")
+- Tool preferences ("use httpx instead of requests")
+- AI interaction style ("be concise", "explain step by step")
+
+User styles are synced to agent.md files (CLAUDE.md, .cursorrules, etc.) so AI tools learn the user's preferences.
+
+### 2. Project Memories (Project-Specific Knowledge)
+
+Knowledge specific to THIS project, organized by category:
+
+| Category | What to Extract |
+|----------|-----------------|
+| frontend | UI framework, component patterns, styling conventions |
+| backend | API framework, database choices, service architecture |
+| docs_test | Testing framework, documentation conventions |
+| other | Deployment, CI/CD, miscellaneous |
 
 ## Operations
 
 | Op | When to Use |
 |----|-------------|
 | ADD | New information not in existing memories |
-| UPDATE | Existing memory needs modification (target_memory_id required) |
-| DEPRECATE | Existing memory is now wrong/outdated (target_memory_id required) |
+| UPDATE | Existing memory needs modification (provide target_text) |
+| DELETE | Existing memory is now wrong/outdated (provide target_text) |
 
-Note: For information not worth storing, return empty memories array with discard_reason.
+## Constraints
 
-## Policy Constraints
+- Never store secrets, API keys, tokens, passwords
+- Never store raw stack traces
+- Keep memories concise (1-2 sentences)
+- Prefer general principles over one-off details
+- User styles must be user-agnostic (no project-specific info)
+- Project memories must be project-specific (no personal preferences)
 
-- At most {max_memories_per_episode} memories per episode
-- Only generate guards for high-impact, repeated issues with strong user frustration
-- Prefer general principles and stable invariants over one-off low-level details
-- Never store secrets, API keys, or raw stack traces
-- For UPDATE/DEPRECATE ops on keyed invariants/preferences: include target_memory_id
+## Output Format (JSON only)
 
-## Polarity
-
-Every memory has a polarity:
-- `polarity: 1` (default) = Recommend this behavior/fact
-- `polarity: -1` = Avoid this behavior (anti-pattern, warning)
-
-Use polarity=-1 for:
-- Guards (kind='guard') - always negative ("don't do X")
-- Anti-patterns learned from failures
-- Warnings about dangerous operations
-
-## Output Format
-
-Return JSON only:
 {
-  "episodes": [
+  "user_styles": [
     {
-      "start_idx": 0,
-      "end_idx": 45,
-      "label": "debugging SSL certificate issue"
+      "op": "ADD | UPDATE | DELETE",
+      "text": "style description",
+      "target_text": "for UPDATE/DELETE: text of existing style to modify"
     }
   ],
-  "memories": [
+  "project_memories": [
     {
-      "op": "ADD | UPDATE | DEPRECATE",
-      "target_memory_id": "uuid (for UPDATE/DEPRECATE only)",
-      "episode_idx": 0,
-      "scope": "project | global | repo_path",
-      "owner_type": "user | team | org",
-      "owner_id": "alice",
-      "kind": "preference | invariant | pattern | guard | note",
-      "tier": "short_term | long_term | emergency",
-      "polarity": 1 | -1,
-      "key": "project.http.client | null",
-      "text": "1-2 sentence human-readable memory",
-      "ttl_days": 30 | null,
-      "confidence": 0.0-1.0,
-      "evidence": {
-        "source": "failure_then_success | user_correction | explicit_statement | pattern_observed | guard_triggered",
-        "frustration": "none | mild | moderate | severe"
-      }
+      "op": "ADD | UPDATE | DELETE",
+      "category": "frontend | backend | docs_test | other",
+      "subcategory": "main",
+      "text": "memory content",
+      "target_text": "for UPDATE/DELETE: text of existing memory to modify"
     }
-  ],
-  "discard_reason": "only browsing, no decisions | null",
-  "carry_state": "working on SSL fix, user frustrated, not resolved yet | null"
+  ]
 }
 
-**Field Descriptions:**
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| episodes | Yes | Detected episode boundaries with semantic labels |
-| memories | Yes | Memory operations (can be empty) |
-| discard_reason | No | Why this chunk yielded no memories (for debugging) |
-| carry_state | No | State to carry to next chunk (incomplete task, ongoing context) |
-
-**Episode Indexing:**
-- `start_idx` / `end_idx`: 0-based indices into input events array
-- Episodes can span chunk boundaries (use carry_state)
-- Multiple episodes per chunk allowed
+If nothing worth extracting, return empty arrays with a reason:
+{
+  "user_styles": [],
+  "project_memories": [],
+  "skip_reason": "why nothing was extracted"
+}
 ```
 
 **User Prompt Template:**
 ```
 PROJECT: {project_id}
-OWNER: {owner_type}/{owner_id}
+PROJECT ROOT: {project_root}
 
-CARRY STATE FROM PREVIOUS CHUNK:
-{carry_state}
+EXISTING USER STYLES:
+{existing_user_styles}
 
-EXISTING MEMORIES (for context):
-{recent_memories}
+EXISTING PROJECT MEMORIES:
+{existing_project_memories}
 
-EVENTS (chunk {chunk_index}):
-{events}
+EPISODE:
+{compressed_events}
 
-POLICY HINTS:
-- Max memories per episode: {max_memories_per_episode}
-
-Analyze this event chunk. Identify episode boundaries, decide what to remember, and return any state to carry forward. Return JSON only.
+Extract memories. Return JSON only.
 ```
 
 ---
 
-### PROMPT-001 Few-Shot Examples
+## PROMPT-002 Examples
 
-**Example 1: Normal debugging episode with clear resolution**
+**Example 1: User style + project memory from debugging**
 
-Input events (chunk 1):
-```json
-[
-  {"idx": 0, "ts": "...", "role": "user", "kind": "message", "summary": "asked to call Stripe API"},
-  {"idx": 1, "ts": "...", "role": "assistant", "kind": "tool_call", "tool_name": "Bash", "summary": "ran python with requests"},
-  {"idx": 2, "ts": "...", "role": "tool", "kind": "tool_result", "summary": "SSLError: certificate verify failed", "is_error": true},
-  {"idx": 3, "ts": "...", "role": "assistant", "kind": "tool_call", "tool_name": "Edit", "summary": "switched to httpx"},
-  {"idx": 4, "ts": "...", "role": "tool", "kind": "tool_result", "summary": "API call succeeded"}
-]
+Input (compressed events):
 ```
+User asked to call Stripe API. Assistant used requests library.
+Got SSLError: certificate verify failed. User said "just use httpx".
+Switched to httpx, API call succeeded.
+```
+
+Existing user styles: ["Prefer async/await over callbacks"]
+Existing project memories: []
 
 Output:
 ```json
 {
-  "episodes": [
-    {"start_idx": 0, "end_idx": 4, "label": "debugging SSL error when calling Stripe API"}
-  ],
-  "memories": [
+  "user_styles": [],
+  "project_memories": [
     {
       "op": "ADD",
-      "episode_idx": 0,
-      "scope": "project",
-      "owner_type": "user",
-      "owner_id": "alice",
-      "kind": "pattern",
-      "tier": "short_term",
-      "polarity": -1,
-      "key": null,
-      "text": "requests library has SSL certificate issues in this environment; httpx works as alternative.",
-      "ttl_days": 30,
-      "confidence": 0.85,
-      "evidence": {"source": "failure_then_success", "frustration": "mild"}
-    },
+      "category": "backend",
+      "subcategory": "main",
+      "text": "Use httpx as HTTP client; requests has SSL issues in this environment"
+    }
+  ]
+}
+```
+
+**Example 2: User preference detected**
+
+Input (compressed events):
+```
+Assistant wrote function with callbacks. User said "no, use async/await instead".
+Rewrote with async/await. User said "yes, always use async".
+```
+
+Existing user styles: []
+Existing project memories: []
+
+Output:
+```json
+{
+  "user_styles": [
     {
       "op": "ADD",
-      "episode_idx": 0,
-      "scope": "project",
-      "owner_type": "user",
-      "owner_id": "alice",
-      "kind": "invariant",
-      "tier": "short_term",
-      "polarity": 1,
-      "key": "project.http.client",
-      "text": "The standard HTTP client for this project is httpx.",
-      "ttl_days": null,
-      "confidence": 0.9,
-      "evidence": {"source": "failure_then_success", "frustration": "mild"}
+      "text": "Prefer async/await over callbacks"
     }
   ],
-  "discard_reason": null,
-  "carry_state": null
+  "project_memories": []
 }
 ```
 
----
+**Example 3: Update existing memory**
 
-**Example 2: Severe frustration with repeated failures**
-
-Input events (chunk 1):
-```json
-[
-  {"idx": 0, "ts": "...", "role": "user", "kind": "message", "summary": "fix the SSL error"},
-  {"idx": 1, "ts": "...", "role": "assistant", "kind": "tool_call", "tool_name": "Bash", "summary": "tried requests with verify=False"},
-  {"idx": 2, "ts": "...", "role": "tool", "kind": "tool_result", "summary": "SSLError again", "is_error": true},
-  {"idx": 3, "ts": "...", "role": "assistant", "kind": "tool_call", "tool_name": "Bash", "summary": "tried updating certificates"},
-  {"idx": 4, "ts": "...", "role": "tool", "kind": "tool_result", "summary": "SSLError still", "is_error": true},
-  {"idx": 5, "ts": "...", "role": "user", "kind": "message", "summary": "ugh just use httpx already!"},
-  {"idx": 6, "ts": "...", "role": "assistant", "kind": "tool_call", "tool_name": "Edit", "summary": "switched to httpx"},
-  {"idx": 7, "ts": "...", "role": "tool", "kind": "tool_result", "summary": "success"}
-]
+Input (compressed events):
 ```
+User said "we're using PostgreSQL 16 now, not 15".
+```
+
+Existing user styles: []
+Existing project memories: [{"category": "backend", "text": "PostgreSQL 15 for database"}]
 
 Output:
 ```json
 {
-  "episodes": [
-    {"start_idx": 0, "end_idx": 7, "label": "repeated SSL failures, user frustrated, switched to httpx"}
-  ],
-  "memories": [
+  "user_styles": [],
+  "project_memories": [
     {
-      "op": "ADD",
-      "episode_idx": 0,
-      "scope": "project",
-      "owner_type": "user",
-      "owner_id": "alice",
-      "kind": "guard",
-      "tier": "emergency",
-      "polarity": -1,
-      "key": null,
-      "text": "Do not keep retrying requests with SSL errors in this project; switch to httpx after the first SSL error.",
-      "ttl_days": 7,
-      "confidence": 0.8,
-      "evidence": {"source": "failure_then_success", "frustration": "severe"}
-    },
-    {
-      "op": "ADD",
-      "episode_idx": 0,
-      "scope": "project",
-      "owner_type": "user",
-      "owner_id": "alice",
-      "kind": "pattern",
-      "tier": "short_term",
-      "polarity": -1,
-      "key": null,
-      "text": "In this project, requests often hits SSL certificate errors; use httpx as the default HTTP client instead.",
-      "ttl_days": 30,
-      "confidence": 0.9,
-      "evidence": {"source": "failure_then_success", "frustration": "severe"}
+      "op": "UPDATE",
+      "category": "backend",
+      "subcategory": "main",
+      "text": "PostgreSQL 16 for database",
+      "target_text": "PostgreSQL 15 for database"
     }
-  ],
-  "discard_reason": null,
-  "carry_state": null
+  ]
 }
 ```
 
----
+**Example 4: Nothing worth extracting**
 
-**Example 3: Purely informational / browsing episode**
-
-Input events (chunk 1):
-```json
-[
-  {"idx": 0, "ts": "...", "role": "user", "kind": "message", "summary": "what files are in src/"},
-  {"idx": 1, "ts": "...", "role": "assistant", "kind": "tool_call", "tool_name": "Bash", "summary": "ls src/"},
-  {"idx": 2, "ts": "...", "role": "tool", "kind": "tool_result", "summary": "listed 5 files"},
-  {"idx": 3, "ts": "...", "role": "user", "kind": "message", "summary": "ok thanks"}
-]
+Input (compressed events):
+```
+User asked "what files are in src/". Assistant listed 5 files. User said "ok thanks".
 ```
 
 Output:
 ```json
 {
-  "episodes": [
-    {"start_idx": 0, "end_idx": 3, "label": "browsing src/ directory"}
-  ],
-  "memories": [],
-  "discard_reason": "purely informational browsing, no decisions or learnings",
-  "carry_state": null
+  "user_styles": [],
+  "project_memories": [],
+  "skip_reason": "Pure browsing, no decisions or learnings"
 }
 ```
-
----
-
-**Example 4: User preference detected**
-
-Input events (chunk 1):
-```json
-[
-  {"idx": 0, "ts": "...", "role": "assistant", "kind": "tool_call", "tool_name": "Edit", "summary": "wrote function with callbacks"},
-  {"idx": 1, "ts": "...", "role": "user", "kind": "message", "summary": "no, use async/await instead"},
-  {"idx": 2, "ts": "...", "role": "assistant", "kind": "tool_call", "tool_name": "Edit", "summary": "rewrote with async/await"},
-  {"idx": 3, "ts": "...", "role": "user", "kind": "message", "summary": "yes, always use async"}
-]
-```
-
-Output:
-```json
-{
-  "episodes": [
-    {"start_idx": 0, "end_idx": 3, "label": "user corrects callback style to async/await"}
-  ],
-  "memories": [
-    {
-      "op": "ADD",
-      "episode_idx": 0,
-      "scope": "global",
-      "owner_type": "user",
-      "owner_id": "alice",
-      "kind": "preference",
-      "tier": "short_term",
-      "polarity": 1,
-      "key": "user.pref.async_style",
-      "text": "User prefers async/await over callbacks.",
-      "ttl_days": null,
-      "confidence": 0.95,
-      "evidence": {"source": "user_correction", "frustration": "mild"}
-    }
-  ],
-  "discard_reason": null,
-  "carry_state": null
-}
-```
-
----
-
-**Example 5: Incomplete task spanning chunks (carry_state usage)**
-
-Input events (chunk 1, last chunk had carry_state: "working on database migration"):
-```json
-[
-  {"idx": 0, "ts": "...", "role": "assistant", "kind": "tool_call", "tool_name": "Edit", "summary": "updated migration script"},
-  {"idx": 1, "ts": "...", "role": "tool", "kind": "tool_result", "summary": "file saved"},
-  {"idx": 2, "ts": "...", "role": "assistant", "kind": "tool_call", "tool_name": "Bash", "summary": "ran migration"},
-  {"idx": 3, "ts": "...", "role": "tool", "kind": "tool_result", "summary": "migration failed: foreign key constraint", "is_error": true}
-]
-```
-
-Output:
-```json
-{
-  "episodes": [],
-  "memories": [],
-  "discard_reason": null,
-  "carry_state": "database migration in progress, failed on foreign key constraint, not yet resolved"
-}
-```
-
-Note: No episode closed because task is incomplete. Memory Writer waits for resolution before extracting learnings.
-
----
-
-## PROMPT-002: Context Composition (Optional)
-
-**Status:** Optional for v1. Template-based composition is the default.
-
-**Model Tier:** fast_model
-
-**ID:** PROMPT-002-COMPOSE
-
-**Purpose:** LLM-based context composition. Use when template output is insufficient.
-
-**Input Variables:**
-
-| Variable | Type | Description |
-|----------|------|-------------|
-| task | string | User's task description |
-| memories | array | Candidate memories with kind/tier/text |
-| token_budget | integer | Max tokens for output |
-
-**System Prompt:**
-```
-You are a context composer for Squirrel memory system.
-
-Your task: Select and format the most relevant memories for a coding task.
-
-SELECTION CRITERIA:
-1. Direct relevance to the task
-2. Status: active > provisional
-3. Tier: emergency/long_term > short_term
-4. Kind: invariant/preference > pattern > note/guard
-
-OUTPUT FORMAT:
-Return a concise prompt injection, max {token_budget} tokens.
-Format as bullet points grouped by kind.
-
-FAST PATH:
-If task is trivial (typo fix, comment change, formatting), return empty string immediately.
-```
-
-**User Prompt Template:**
-```
-TASK: {task}
-
-CANDIDATE MEMORIES:
-{memories}
-
-TOKEN BUDGET: {token_budget}
-
-Select and format relevant memories. Return prompt text only.
-```
-
----
-
-## PROMPT-003: Conflict Detection
-
-**Status:** Deprecated. Conflict detection is now handled by Memory Writer (PROMPT-001).
-
-Memory Writer decides UPDATE/DEPRECATE operations as part of its output. No separate conflict detection prompt needed.
-
----
-
-## PROMPT-004: CLI Command Interpretation
-
-**Model Tier:** fast_model
-
-**ID:** PROMPT-004-CLI
-
-**Purpose:** Map natural language to structured CLI commands.
-
-**Input Variables:**
-
-| Variable | Type | Description |
-|----------|------|-------------|
-| user_input | string | Raw user command |
-| available_commands | string | List of valid commands |
-
-**System Prompt:**
-```
-You are a command interpreter for Squirrel CLI.
-
-Your task: Map natural language to structured commands.
-
-AVAILABLE COMMANDS:
-- search <query>: Search memories
-- forget <id|query>: Delete memory
-- export [--kind <kind>]: Export memories
-- status: Show stats
-- flush: Force episode processing
-
-OUTPUT FORMAT (JSON):
-{
-  "command": "search|forget|export|status|flush|unknown",
-  "args": {},
-  "confirmation_needed": true|false
-}
-
-RULES:
-- "forget" always needs confirmation unless explicit ID given
-- Ambiguous input → command: "unknown"
-```
-
-**User Prompt Template:**
-```
-USER INPUT: {user_input}
-
-AVAILABLE COMMANDS:
-{available_commands}
-
-Interpret command. Return JSON only.
-```
-
----
-
-## PROMPT-005: User Preference Extraction
-
-**Status:** Deprecated. Preference extraction is now handled by Memory Writer (PROMPT-001).
-
-Memory Writer detects preferences from user corrections, repeated phrasing, and explicit statements, then generates kind='preference' memories with appropriate keys.
 
 ---
 
@@ -528,9 +289,10 @@ Memory Writer detects preferences from user corrections, repeated phrasing, and 
 
 | Prompt ID | Max Input | Max Output |
 |-----------|-----------|------------|
-| PROMPT-001 (Memory Writer) | 8000 | 2000 |
-| PROMPT-002 (Compose) | 4000 | 500 |
-| PROMPT-004 (CLI) | 500 | 100 |
+| PROMPT-001 (Log Cleaner) | 8000 | 2000 |
+| PROMPT-002 (Memory Extractor) | 8000 | 2000 |
+
+---
 
 ## Error Handling
 
@@ -543,12 +305,16 @@ All prompts must handle:
 | Timeout | Log, return empty result, don't block |
 | Content filter | Log, skip memory, continue |
 
-## Pre-filtering
+---
 
-**Status:** Removed for v1 (AI-Primary approach).
+## Deprecated Prompts
 
-Per P2: AI-Primary, the Memory Writer decides what to discard. No rule-based pre-filtering.
+The following prompts from the old architecture are no longer used:
 
-The Memory Writer uses `discard_reason` to explain why a chunk yielded no memories. This provides transparency without hardcoded rules.
-
-Future versions may add optional pre-filtering for cost optimization, but v1 sends all chunks to Memory Writer.
+| Old Prompt | Status |
+|------------|--------|
+| PROMPT-001-MEMORY-WRITER | Replaced by PROMPT-001 + PROMPT-002 pipeline |
+| PROMPT-002-COMPOSE | Removed (no context composition needed) |
+| PROMPT-003-CONFLICT | Removed (Memory Extractor handles conflicts) |
+| PROMPT-004-CLI | Removed (CLI is minimal, no NLU needed) |
+| PROMPT-005-PREFERENCE | Removed (Memory Extractor handles preferences) |

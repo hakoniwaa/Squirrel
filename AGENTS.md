@@ -26,8 +26,6 @@ All documentation, specs, and structures are designed for AI comprehension. Use 
 | specs/ARCHITECTURE.md | System boundaries, data flow |
 | specs/SCHEMAS.md | Database schemas (SCHEMA-*) |
 | specs/INTERFACES.md | IPC, MCP, CLI contracts (IPC-*, MCP-*, CLI-*) |
-| specs/KEYS.md | Key conventions (non-binding suggestions) |
-| specs/POLICY.md | Memory policy configuration |
 | specs/PROMPTS.md | LLM prompts with model tiers (PROMPT-*) |
 | specs/DECISIONS.md | Architecture decision records (ADR-*) |
 
@@ -71,6 +69,17 @@ A pre-commit hook (`.githooks/pre-commit`) will show you which files changed.
 | New key/schema/interface? | Add to registry with ID |
 | Unclear requirement? | Mark `[NEEDS CLARIFICATION]`, ask user |
 
+## Stop and Discuss
+
+**Do NOT decide these on your own. Stop and discuss with me:**
+
+- Model selection (which LLM to use, model tiers)
+- Numeric values (thresholds, limits, timeouts)
+- Prompts (system prompts, extraction prompts)
+- Any non-trivial design decisions
+
+These are not "screw-tightening" tasks. I want input on these choices.
+
 ## Project Rules
 
 See `.cursor/rules/*.mdc` for context-specific rules:
@@ -88,8 +97,8 @@ Rust Daemon (I/O, storage, MCP) <--IPC--> Python Memory Service (LLM operations)
 
 | Component | Responsibility | Never Does |
 |-----------|----------------|------------|
-| Rust Daemon | Log watching, MCP server, CLI, SQLite, guard interception | LLM calls |
-| Python Memory Service | Memory Writer, embeddings, CR-Memory evaluation | File watching, direct DB access |
+| Rust Daemon | Log watching, MCP server, CLI, SQLite | LLM calls |
+| Python Memory Service | Log Cleaner, Memory Extractor, Style Syncer, embeddings | File watching, direct DB access |
 
 ## Development Environment
 
@@ -112,7 +121,6 @@ Available commands:
 - Documentation written for AI comprehension
 - English only in code, comments, commits
 - Brief, direct language
-- Today's date: 2025 Dec 10
 
 ### Git Workflow
 

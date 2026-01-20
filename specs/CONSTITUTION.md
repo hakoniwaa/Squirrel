@@ -12,25 +12,24 @@ Project governance and principles for AI agents working on this codebase.
 
 ## Core Principles
 
-### P1: Future-Impact
+### P1: Simple
 
-**Memory value = regret reduction in future episodes.**
+**Simple use_count based ordering. No complex evaluation loops.**
 
-A memory is valuable only if it measurably helps in future sessions - reducing repeated bugs, repeated confusion, or wasted tokens. Not because it came from frustration. Not because the outcome was success/failure. Because it actually helped later.
+Memories are ranked by how often they've been extracted or reinforced. Higher use_count = more important. No regret calculation, no opportunity tracking, no complex promotion/deprecation logic.
 
-This is our unique advantage: we have full Claude Code session logs with the complete timeline of what happens AFTER a memory is created. We can measure real future impact. Generic memory systems (mem0, langmem) cannot.
-
-| Old Approach | New Approach |
-|--------------|--------------|
-| frustration → importance | future usage → value |
-| outcome (success/failure) → store | opportunities/regret_hits → promote/deprecate |
-| support_count | use_count + opportunities |
+| Aspect | Our Approach |
+|--------|--------------|
+| Ranking | use_count DESC |
+| New memory | use_count = 1 |
+| Reinforced | use_count++ |
+| Garbage collection | use_count = 0 AND age > threshold |
 
 ### P2: AI-Primary
 
 **The model is the decision-maker, not a form-filler.**
 
-We don't design 20-field schemas for the LLM to fill. We don't write rules like "frustration=severe → importance=critical". We give the model episodes and existing memories, and it decides what to extract, how to phrase it, what operations to perform.
+We don't design complex schemas for the LLM to fill. We give the model episodes and existing memories, and it decides what to extract, how to phrase it, what operations to perform.
 
 | Our Job | Not Our Job |
 |---------|-------------|
@@ -39,20 +38,17 @@ We don't design 20-field schemas for the LLM to fill. We don't write rules like 
 | Set constraints | Choose phrasing |
 | Declare objectives | Assign importance levels |
 
-### P3: Declarative
+### P3: Passive
 
-**We declare objectives and constraints. The model + evaluation loop discover the policy.**
+**Daemon watches logs, never intercepts tool calls.**
 
-We declare:
-- **Objectives:** minimize repeated debugging, minimize re-explaining preferences, avoid re-discovering invariants
-- **Constraints:** no secrets, no raw stack traces, favor stable over transient
-- **Policy parameters:** promotion/deprecation thresholds in `memory_policy.toml`
+100% invisible during coding sessions. No prompts, no confirmations, no interruptions. Watch logs silently, learn passively.
 
-We don't declare:
-- What to extract from each episode
-- How to phrase memories
-- When to UPDATE vs ADD
-- What kind/tier to assign
+### P4: Distributed-First
+
+**All extraction happens locally. No central server required for core functionality.**
+
+Each developer's machine is the source of truth. Cloud features (team sync) are optional B2B add-ons.
 
 ---
 
@@ -65,7 +61,6 @@ We don't declare:
 | **Cross-platform** | Support Mac, Linux, Windows. No OS-specific hacks in core code. |
 | **No secrets** | Never store API keys, tokens, passwords, or credentials as memories. |
 | **No raw logs** | Don't store raw stack traces or full tool outputs. Compress and summarize. |
-| **Immediate usability** | New memories must be usable in the next task (no delay for batch processing). |
 
 ---
 
@@ -73,9 +68,9 @@ We don't declare:
 
 | Component | Language | Responsibility | Boundary |
 |-----------|----------|----------------|----------|
-| Rust Daemon | Rust | Log watching, storage, MCP server, CLI, guard interception | Never contains LLM logic |
-| Python Agent | Python | Memory Writer, embeddings, context composition | Never does file watching |
-| IPC | JSON-RPC 2.0 | Communication between daemon and agent | Unix socket / named pipe |
+| Rust Daemon | Rust | Log watching, storage, MCP server, CLI | Never contains LLM logic |
+| Python Memory Service | Python | Log Cleaner, Memory Extractor, Style Syncer, embeddings | Never does file watching |
+| IPC | JSON-RPC 2.0 | Communication between daemon and service | Unix socket / named pipe |
 
 ---
 
@@ -86,15 +81,15 @@ We don't declare:
 | Storage | SQLite + sqlite-vec | Yes (v1) |
 | MCP SDK | rmcp (Rust) | Yes (v1) |
 | Agent Framework | PydanticAI | Yes (v1) |
+| LLM Client | LiteLLM | Yes (v1) |
 | Embeddings | API-based (OpenAI default) | Provider swappable |
-| LLM | Strong model for Memory Writer | Provider swappable |
 
 ---
 
 ## Development Rules
 
 ### DR1: Spec IDs Required
-Every schema, interface, prompt, and policy must have a stable ID (e.g., `SCHEMA-001`, `POLICY-001`). PRs must reference spec IDs.
+Every schema, interface, prompt, and policy must have a stable ID (e.g., `SCHEMA-001`, `IPC-001`). PRs must reference spec IDs.
 
 ### DR2: No Implicit Behavior
 If behavior isn't in specs, it doesn't exist. No "obvious" defaults. Document everything.
@@ -112,13 +107,13 @@ Only change what's necessary. No drive-by refactoring. No "while I'm here" impro
 Specs are source of truth. Code is generated output. Never introduce behavior not defined in specs. Update specs before or with code, never after.
 
 ### DR7: Docs Always Current
-Keep all documentation up-to-date at every moment. When code changes, update related docs in the same commit. Never leave docs stale. Structure specs, API docs, and README must reflect current implementation.
+Keep all documentation up-to-date at every moment. When code changes, update related docs in the same commit. Never leave docs stale.
 
 ### DR8: Clean Up Test Artifacts
-Promptly clean up test files after use. Remove temporary test data, mock files, and debug outputs. Keep the project clean. Test artifacts should not accumulate in the repository.
+Promptly clean up test files after use. Remove temporary test data, mock files, and debug outputs.
 
 ### DR9: Small Commits, Concise English
-Use small, atomic commits. Each commit should do one thing. Commit messages must be concise English - no long explanations, no Chinese, no emojis. Format: `type(scope): brief description`.
+Use small, atomic commits. Each commit should do one thing. Commit messages must be concise English. Format: `type(scope): brief description`.
 
 ---
 
@@ -148,8 +143,7 @@ Single source of truth for AI tool instructions:
 
 | File | Purpose |
 |------|---------|
-| `AGENTS.md` | Canonical source (Codex native) |
-| `.claude/CLAUDE.md` | Symlink → AGENTS.md |
+| `.claude/CLAUDE.md` | Claude Code project rules |
 | `.cursor/rules/*.mdc` | Cursor project rules |
 
-GEMINI.md and .cursorrules are deprecated. Configure Gemini CLI to read AGENTS.md via `contextFileName` setting.
+Squirrel manages a block in these files for user style (see INTERFACES.md for format).
