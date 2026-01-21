@@ -35,17 +35,16 @@ Squirrel uses Gemini 3.0 Flash for both stages. Configured via LiteLLM.
 
 **System Prompt:**
 ```
-You scan user messages to detect if the user corrected the AI or stated a preference.
+You scan user messages to detect corrections or preferences.
 
 Look for signals like corrections, frustration, or preference statements.
 
 Skip messages that are just acknowledgments ("ok", "sure", "continue", "looks good").
 
-OUTPUT (JSON only):
-{
-  "needs_context": true | false,
-  "trigger_index": <index of the message that triggered, or null if needs_context is false>
-}
+Output JSON only:
+{"needs_context": true, "trigger_index": 1}
+or
+{"needs_context": false, "trigger_index": null}
 ```
 
 **User Prompt Template:**
@@ -83,73 +82,36 @@ Does any message indicate a correction or preference? Return JSON only.
 
 **System Prompt:**
 ```
-You are the Memory Extractor for Squirrel, a coding memory system.
+Extract memories from user corrections. Output JSON only.
 
-You receive a user message that may contain a correction, along with recent AI context.
+User Style = global preference (all projects)
+Project Memory = this project only
 
-## Two Types of Memories
+Example output:
+{"user_styles": [{"op": "ADD", "text": "never use emoji"}], "project_memories": []}
 
-### 1. User Styles (Global Preferences)
-Preferences that apply to ALL projects. Synced to agent.md files automatically.
+Another example:
+{"user_styles": [], "project_memories": [{"op": "ADD", "category": "backend", "text": "use httpx"}]}
 
-### 2. Project Memories (Project-Specific)
-Knowledge specific to THIS project. User triggers via MCP when needed.
-
-## Decision
-- User's general preference? → User Style
-- Project-specific technical issue? → Project Memory
-- Not sure? → Project Memory (safer default)
-- Not worth remembering? → Return empty arrays
-
-## Operations
-
-| Op | When to Use |
-|----|-------------|
-| ADD | New memory not in existing |
-| UPDATE | Modifies existing (provide target_id) |
-| DELETE | Existing is now wrong (provide target_id) |
-
-## Output Format (JSON only)
-
-{
-  "user_styles": [
-    { "op": "ADD", "text": "preference" },
-    { "op": "UPDATE", "target_id": "id", "text": "updated" },
-    { "op": "DELETE", "target_id": "id" }
-  ],
-  "project_memories": [
-    { "op": "ADD", "category": "frontend|backend|docs_test|other", "text": "memory" },
-    { "op": "UPDATE", "target_id": "id", "text": "updated" },
-    { "op": "DELETE", "target_id": "id" }
-  ]
-}
-
-If not worth remembering:
-{
-  "user_styles": [],
-  "project_memories": [],
-  "skip_reason": "why"
-}
+Rules:
+- Each item MUST be an object with "op" and "text" fields
+- op: "ADD", "UPDATE", or "DELETE"
+- category (project only): "frontend", "backend", "docs_test", "other"
+- Return empty arrays if not worth remembering
 ```
 
 **User Prompt Template:**
 ```
 PROJECT: {project_id}
-PROJECT ROOT: {project_root}
 
-EXISTING USER STYLES:
-{existing_user_styles}
+EXISTING USER STYLES: {existing_user_styles}
+EXISTING PROJECT MEMORIES: {existing_project_memories}
 
-EXISTING PROJECT MEMORIES:
-{existing_project_memories}
-
-AI CONTEXT (3 turns before trigger):
+AI CONTEXT:
 {ai_context}
 
-USER MESSAGE (trigger):
+USER MESSAGE:
 {trigger_message}
-
-Extract memories if worth remembering. Return JSON only.
 ```
 
 ---
