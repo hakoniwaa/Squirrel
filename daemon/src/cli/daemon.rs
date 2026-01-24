@@ -3,8 +3,9 @@
 use std::fs;
 use std::path::PathBuf;
 
-use tracing::info;
+use tracing::{info, warn};
 
+use crate::cli::service;
 use crate::error::Error;
 
 /// Enable the watcher daemon.
@@ -17,11 +18,27 @@ pub async fn enable() -> Result<(), Error> {
     }
 
     update_watcher_config(&config_path, true)?;
+
+    // Start the service
+    if !service::is_installed()? {
+        println!("Installing background service...");
+        if let Err(e) = service::install() {
+            warn!(error = %e, "Failed to install service");
+            println!("Warning: Could not install background service: {}", e);
+            return Ok(());
+        }
+    }
+
+    if !service::is_running()? {
+        if let Err(e) = service::start() {
+            warn!(error = %e, "Failed to start service");
+            println!("Warning: Could not start background service: {}", e);
+            return Ok(());
+        }
+    }
+
     println!("Watcher enabled.");
     println!("Squirrel will learn from your coding sessions.");
-
-    // TODO: Actually start the watcher daemon process
-    // For now, this just updates the config flag
 
     Ok(())
 }
@@ -36,11 +53,17 @@ pub async fn disable() -> Result<(), Error> {
     }
 
     update_watcher_config(&config_path, false)?;
+
+    // Stop the service
+    if service::is_running()? {
+        if let Err(e) = service::stop() {
+            warn!(error = %e, "Failed to stop service");
+            println!("Warning: Could not stop background service: {}", e);
+        }
+    }
+
     println!("Watcher disabled.");
     println!("Run 'sqrl on' to re-enable.");
-
-    // TODO: Actually stop the watcher daemon process
-    // For now, this just updates the config flag
 
     Ok(())
 }

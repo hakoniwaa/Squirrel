@@ -3,8 +3,9 @@
 use std::fs;
 use std::path::PathBuf;
 
-use tracing::info;
+use tracing::{info, warn};
 
+use crate::cli::service;
 use crate::error::Error;
 
 /// Default history to process (30 days).
@@ -53,6 +54,24 @@ pub async fn run(process_history: bool) -> Result<(), Error> {
         // This would scan ~/.claude/projects/ for sessions related to this project
         // and process them chronologically
         println!("(History processing not yet implemented)");
+    }
+
+    // Install and start the system service
+    if !service::is_installed()? {
+        println!("Installing background service...");
+        if let Err(e) = service::install() {
+            warn!(error = %e, "Failed to install service");
+            println!("Warning: Could not install background service: {}", e);
+            println!("You can manually start the watcher with 'sqrl watch-daemon'");
+        } else {
+            println!("Background service installed.");
+        }
+    } else if !service::is_running()? {
+        // Service installed but not running, start it
+        if let Err(e) = service::start() {
+            warn!(error = %e, "Failed to start service");
+            println!("Warning: Could not start background service: {}", e);
+        }
     }
 
     println!();

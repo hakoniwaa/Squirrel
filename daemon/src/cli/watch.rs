@@ -1,4 +1,4 @@
-//! Watch command - start the log watcher daemon.
+//! Watch daemon - watches Claude Code logs and sends episodes to Python service.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -12,14 +12,16 @@ use crate::watcher::{
     CompletedSession, FileWatcher, LogParser, PositionStore, SessionTracker, WatchEvent,
 };
 
-/// Interval for checking idle sessions.
+/// Interval for checking idle sessions (seconds).
 const IDLE_CHECK_INTERVAL_SECS: u64 = 60;
 
-/// Interval for polling file events.
+/// Interval for polling file events (milliseconds).
 const POLL_INTERVAL_MS: u64 = 100;
 
-/// Run the watch command.
-pub async fn run(flush: bool) -> Result<(), Error> {
+/// Run the watcher daemon (called by system service).
+pub async fn run_daemon() -> Result<(), Error> {
+    info!("Starting Squirrel watcher daemon");
+
     // Initialize components
     let mut file_watcher = FileWatcher::new()?;
     let parser = LogParser::new();
@@ -30,28 +32,17 @@ pub async fn run(flush: bool) -> Result<(), Error> {
     // Check if Python service is running
     if !ipc_client.is_service_running().await {
         warn!("Python Memory Service is not running at /tmp/sqrl_agent.sock");
-        warn!("Start it with: python -m sqrl serve");
+        warn!("Memories won't be extracted until the service starts");
     }
 
     // Start watching
     file_watcher.start()?;
-    info!("Watcher started");
-
-    // If flush mode, just check idle sessions and exit
-    if flush {
-        info!("Flush mode - completing all sessions");
-        let completed = session_tracker.flush_all();
-        for session in completed {
-            send_to_service(&ipc_client, session).await;
-        }
-        position_store.save()?;
-        return Ok(());
-    }
+    info!("Watching for Claude Code log changes");
 
     // Track last idle check time
     let mut last_idle_check = std::time::Instant::now();
 
-    // Main event loop - use a simple polling approach
+    // Main event loop
     loop {
         // Poll for file events
         while let Some(event) = file_watcher.try_recv() {

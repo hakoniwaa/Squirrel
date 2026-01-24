@@ -3,6 +3,9 @@
 use std::fs;
 use std::io::{self, Write};
 
+use tracing::warn;
+
+use crate::cli::service;
 use crate::error::Error;
 
 /// Run the goaway command.
@@ -31,6 +34,15 @@ pub async fn run(force: bool) -> Result<(), Error> {
         if !input.trim().eq_ignore_ascii_case("y") {
             println!("Cancelled.");
             return Ok(());
+        }
+    }
+
+    // Stop and uninstall the service
+    if service::is_installed().unwrap_or(false) {
+        println!("Stopping and uninstalling background service...");
+        if let Err(e) = service::uninstall() {
+            warn!(error = %e, "Failed to uninstall service");
+            println!("Warning: Could not uninstall background service: {}", e);
         }
     }
 

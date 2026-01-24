@@ -43,6 +43,10 @@ enum Commands {
 
     /// Open configuration in browser
     Config,
+
+    /// Internal: run the watcher daemon (used by system service)
+    #[command(hide = true)]
+    WatchDaemon,
 }
 
 #[tokio::main]
@@ -76,6 +80,9 @@ async fn main() -> Result<(), Error> {
         }
         Some(Commands::Config) => {
             cli::config::open()?;
+        }
+        Some(Commands::WatchDaemon) => {
+            cli::watch::run_daemon().await?;
         }
     }
 
