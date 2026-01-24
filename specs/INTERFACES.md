@@ -230,11 +230,11 @@ Memories ordered by use_count within each category.
 
 ### CLI-001: sqrl
 
-Open Dashboard in browser.
+Show help.
 
 **Usage:** `sqrl`
 
-**Action:** Opens `http://localhost:PORT/dashboard` or `https://app.sqrl.dev` (if logged in to cloud).
+**Action:** Displays available commands and usage information.
 
 ---
 
@@ -244,42 +244,72 @@ Initialize project for Squirrel.
 
 **Usage:**
 ```bash
-sqrl init                    # Initialize, watch future logs only
-sqrl init --history 30       # Initialize + process last 30 days
-sqrl init --history all      # Initialize + process all history
+sqrl init                    # Initialize + process last 30 days of history
+sqrl init --no-history       # Initialize without processing historical logs
 ```
 
 **Actions:**
-1. Create `.sqrl/memory.db`
-2. Detect AI tools in use (Claude Code, Cursor, etc.)
-3. Configure MCP for detected tools
-4. If `--history`: scan and process historical logs
-5. Add `.sqrl/` to `.gitignore`
+1. Create `.sqrl/` directory
+2. Create `.sqrl/memory.db` placeholder
+3. Write `.sqrl/config.json` with watcher_enabled: true
+4. Add `.sqrl/` to `.gitignore`
+5. Install system service (systemd/launchd/Task Scheduler)
+6. Start the watcher daemon
+7. If not `--no-history`: process last 30 days of historical logs
 
 ---
 
-### CLI-003: sqrl status
+### CLI-003: sqrl on
 
-Show daemon status and stats.
+Enable the watcher daemon.
 
-**Usage:** `sqrl status`
+**Usage:** `sqrl on`
 
-**Output:**
+**Actions:**
+1. Update config.json to watcher_enabled: true
+2. Install system service if not installed
+3. Start the service
+
+---
+
+### CLI-004: sqrl off
+
+Disable the watcher daemon.
+
+**Usage:** `sqrl off`
+
+**Actions:**
+1. Update config.json to watcher_enabled: false
+2. Stop the service
+
+---
+
+### CLI-005: sqrl goaway
+
+Remove all Squirrel data from project.
+
+**Usage:**
+```bash
+sqrl goaway          # Interactive confirmation
+sqrl goaway --force  # Skip confirmation
+sqrl goaway -f       # Skip confirmation (short form)
 ```
-Squirrel Status
-───────────────
-Daemon: running (pid 12345)
-Project: /home/alice/projects/payment-api
 
-User Styles: 12
-Project Memories:
-  frontend: 5
-  backend: 8
-  docs_test: 3
-  other: 2
+**Actions:**
+1. Show what will be removed
+2. Prompt for confirmation (unless --force)
+3. Stop and uninstall system service
+4. Remove `.sqrl/` directory
 
-Last extraction: 2 hours ago
-```
+---
+
+### CLI-006: sqrl config
+
+Open configuration in browser.
+
+**Usage:** `sqrl config`
+
+**Action:** Opens Dashboard in default browser (`http://localhost:PORT/dashboard` or `https://app.sqrl.dev`).
 
 ---
 

@@ -274,18 +274,22 @@ Team features require cloud service for sync and management.
 
 **Status:** accepted
 **Date:** 2025-01-20
+**Updated:** 2025-01-25
 
 **Context:**
 Previous design had many CLI commands (search, forget, export, flush, policy). With Dashboard for editing, most CLI commands are unnecessary.
 
 **Decision:**
-Reduce CLI to three commands:
+Reduce CLI to essential commands:
 
 | Command | Purpose |
 |---------|---------|
-| `sqrl` | Open Dashboard in browser |
-| `sqrl init [--history <days\|all>]` | Initialize project |
-| `sqrl status` | Show daemon status |
+| `sqrl` | Show help |
+| `sqrl init [--no-history]` | Initialize project (30 days history by default) |
+| `sqrl on` | Enable watcher daemon |
+| `sqrl off` | Disable watcher daemon |
+| `sqrl goaway [-f]` | Remove all Squirrel data |
+| `sqrl config` | Open Dashboard in browser |
 
 All other operations (edit, delete, search) happen in Dashboard.
 
@@ -293,6 +297,7 @@ All other operations (edit, delete, search) happen in Dashboard.
 - (+) Simpler CLI, less code to maintain
 - (+) Dashboard provides better UX for editing
 - (+) Consistent experience across operations
+- (+) Clear daemon control via on/off
 - (-) No quick command-line memory search
 - (-) Requires browser for management
 
@@ -327,6 +332,38 @@ Users can add custom subcategories via Dashboard.
 - (+) MCP can return all grouped by category
 - (-) May not fit all project types
 - (-) Need subcategories for complex projects
+
+---
+
+## ADR-016: System Service for Daemon
+
+**Status:** accepted
+**Date:** 2025-01-25
+
+**Context:**
+The watcher daemon needs to run persistently in the background. Options:
+- Foreground process: User must keep terminal open
+- PID file management: Manual start/stop, doesn't survive reboot
+- System service: Managed by OS, survives reboot, auto-restart
+
+**Decision:**
+Use platform-native system services:
+
+| Platform | Service |
+|----------|---------|
+| Linux | systemd user service (`~/.config/systemd/user/dev.sqrl.daemon.service`) |
+| macOS | launchd agent (`~/Library/LaunchAgents/dev.sqrl.daemon.plist`) |
+| Windows | Task Scheduler (runs at logon) |
+
+Hidden command `sqrl watch-daemon` runs the actual watcher loop. System service calls this command.
+
+**Consequences:**
+- (+) Survives reboots and terminal closures
+- (+) Auto-restart on failure
+- (+) Platform-native management (systemctl, launchctl)
+- (+) No manual daemon management for users
+- (-) Platform-specific code paths
+- (-) Requires service installation on first init
 
 ---
 

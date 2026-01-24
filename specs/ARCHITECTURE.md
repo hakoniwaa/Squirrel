@@ -85,8 +85,9 @@ High-level system boundaries and data flow.
 |--------|---------|
 | Log Watcher | File system events for CLI logs (notify) |
 | MCP Server | Serves project memory to AI tools (rmcp) |
-| CLI Handler | `sqrl`, `sqrl init`, `sqrl status` (clap) |
+| CLI Handler | `sqrl init`, `sqrl on/off`, `sqrl goaway`, `sqrl config` (clap) |
 | SQLite Storage | User style + project memory storage |
+| Service Manager | System service (systemd/launchd/Task Scheduler) |
 
 **Owns:**
 - SQLite read/write
@@ -256,12 +257,15 @@ Periodic cleanup (configurable interval):
 
 | Command | Action |
 |---------|--------|
-| `sqrl` | Open Dashboard in browser |
-| `sqrl init` | Initialize project |
-| `sqrl init --history <days\|all>` | Initialize + process historical logs |
-| `sqrl status` | Show daemon status and stats |
+| `sqrl` | Show help |
+| `sqrl init` | Initialize project (processes 30 days of history by default) |
+| `sqrl init --no-history` | Initialize without processing historical logs |
+| `sqrl on` | Enable watcher daemon |
+| `sqrl off` | Disable watcher daemon |
+| `sqrl goaway` | Remove all Squirrel data from project |
+| `sqrl config` | Open configuration in browser |
 
-All other operations via Dashboard.
+Memory management via Dashboard (web UI).
 
 ---
 
