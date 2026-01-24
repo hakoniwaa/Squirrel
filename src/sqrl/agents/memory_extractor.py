@@ -1,4 +1,10 @@
-"""PROMPT-002: Memory Extractor agent."""
+"""PROMPT-002: Memory Extractor agent.
+
+Extracts actionable memories from flagged messages.
+Focus: "What should AI do differently in future sessions?"
+
+Timing: Called only for messages flagged by Stage 1 (User Scanner).
+"""
 
 import json
 import os
@@ -6,28 +12,49 @@ import os
 from openai import AsyncOpenAI
 
 from sqrl.models.episode import ExistingProjectMemory, ExistingUserStyle
-from sqrl.models.extraction import ExtractorOutput
+from sqrl.models.extraction import CONFIDENCE_THRESHOLD, ExtractorOutput
 
-SYSTEM_PROMPT = """Extract memories from user corrections. Output JSON only.
+SYSTEM_PROMPT = """Extract behavioral adjustments from user feedback. Output JSON only.
 
-User Style = global preference (all projects)
-Project Memory = this project only
+Your task: What should AI do DIFFERENTLY in future sessions?
+
+User Style = global preference (applies to ALL projects)
+Project Memory = specific to THIS project only
 
 Example output:
-{"user_styles": [{"op": "ADD", "text": "never use emoji"}], "project_memories": []}
+{
+  "user_styles": [
+    {"op": "ADD", "text": "never use emoji", "confidence": 0.9}
+  ],
+  "project_memories": []
+}
 
 Another example:
-{"user_styles": [], "project_memories": [{"op": "ADD", "category": "backend", "text": "use httpx"}]}
+{
+  "user_styles": [],
+  "project_memories": [
+    {"op": "ADD", "category": "backend", "text": "use httpx not requests", "confidence": 0.85}
+  ]
+}
 
 Rules:
-- Each item MUST be an object with "op" and "text" fields
 - op: "ADD", "UPDATE", or "DELETE"
 - category (project only): "frontend", "backend", "docs_test", "other"
-- Return empty arrays if not worth remembering"""
+- confidence: 0.0-1.0 (only memories with confidence > 0.8 will be stored)
+- Empty arrays if nothing worth remembering
+
+Do NOT extract:
+- One-off tasks ("make a video about X")
+- Temporary debugging steps
+- Universal best practices everyone knows
+- Things that only apply to this exact moment"""
 
 
 class MemoryExtractor:
-    """Memory Extractor using raw OpenAI client."""
+    """Memory Extractor using raw OpenAI client.
+
+    Extracts behavioral adjustments from flagged user messages.
+    """
 
     def __init__(self) -> None:
         self.client = AsyncOpenAI(
@@ -44,8 +71,22 @@ class MemoryExtractor:
         ai_context: str,
         existing_user_styles: list[ExistingUserStyle],
         existing_project_memories: list[ExistingProjectMemory],
+        apply_confidence_filter: bool = True,
     ) -> ExtractorOutput:
-        """Extract memories from user message with AI context."""
+        """Extract memories from user message with AI context.
+
+        Args:
+            project_id: Project identifier.
+            project_root: Absolute path to project.
+            trigger_message: The user message flagged by Stage 1.
+            ai_context: The 3 AI turns before the trigger message.
+            existing_user_styles: Current user style items.
+            existing_project_memories: Current project memories.
+            apply_confidence_filter: If True, filter out low-confidence memories.
+
+        Returns:
+            ExtractorOutput with extracted memories (filtered by confidence if enabled).
+        """
         styles_json = json.dumps(
             [{"id": s.id, "text": s.text} for s in existing_user_styles],
         )
@@ -61,11 +102,13 @@ class MemoryExtractor:
 EXISTING USER STYLES: {styles_json}
 EXISTING PROJECT MEMORIES: {memories_json}
 
-AI CONTEXT:
+AI CONTEXT (what AI did before user's message):
 {ai_context}
 
-USER MESSAGE:
-{trigger_message}"""
+USER MESSAGE (the feedback):
+{trigger_message}
+
+What behavioral adjustments should be remembered for future sessions?"""
 
         response = await self.client.chat.completions.create(
             model=self.model,
@@ -84,6 +127,12 @@ USER MESSAGE:
 
         try:
             data = json.loads(content.strip())
-            return ExtractorOutput(**data)
+            output = ExtractorOutput(**data)
+
+            # Apply confidence threshold filter
+            if apply_confidence_filter:
+                output = output.filter_by_confidence(CONFIDENCE_THRESHOLD)
+
+            return output
         except (json.JSONDecodeError, ValueError):
             return ExtractorOutput()

@@ -106,13 +106,13 @@ High-level system boundaries and data flow.
 
 | Module | Purpose | Model |
 |--------|---------|-------|
-| Log Cleaner | Remove noise, compress tokens | gemini-3.0-flash |
-| Memory Extractor | Extract user style + project memory | gemini-3.0-flash |
+| User Scanner | Identify messages with behavioral patterns | gemini-3.0-flash |
+| Memory Extractor | Extract behavioral adjustments | gemini-3.0-pro |
 | Style Syncer | Write user style to agent.md | N/A |
 
 **Owns:**
 - All LLM API calls
-- Log cleaning/compression
+- Session-end extraction pipeline
 - Memory extraction logic
 - agent.md file writes
 
@@ -175,21 +175,26 @@ Project-specific knowledge, organized by category.
 
 ### FLOW-001: Memory Extraction (Input)
 
+**Timing:** Session-end processing (not per-message)
+
 ```
 1. User codes with AI CLI
 2. CLI writes to log file
 3. Daemon detects file change (notify)
-4. Daemon buffers events until episode boundary:
+4. Daemon buffers events until session boundary:
    - Time gap (>30 min idle)
    - Explicit flush (sqrl flush)
-5. Daemon sends raw events to Memory Service
-6. Log Cleaner (cheap model):
-   - Removes noise, redundant code blocks
-   - Compresses to reduce tokens
-   - Decides if worth extracting (skip if trivial)
-7. Memory Extractor (strong model):
-   - Extracts user style items
-   - Extracts project memories with categories
+5. Daemon sends session data to Memory Service
+6. User Scanner (Flash model):
+   - Scans user messages only (cheap)
+   - Identifies messages with behavioral patterns
+   - Returns indices of flagged messages
+   - If no patterns found, skip to step 9
+7. Memory Extractor (Pro model):
+   - Only processes flagged messages + AI context
+   - Asks: "What should AI do differently?"
+   - Extracts memories with confidence scores
+   - Only memories with confidence > 0.8 proceed
    - Compares with existing memories:
      - Duplicate: increment use_count
      - Similar: merge/update
@@ -199,6 +204,11 @@ Project-specific knowledge, organized by category.
    - Syncs to agent.md files
 9. Daemon stores project memories in SQLite
 ```
+
+**Key Design Decisions:**
+- Two-stage pipeline keeps costs low (Flash filters, Pro only sees relevant slices)
+- Session-end processing provides full context, reduces mid-conversation noise
+- Confidence threshold (>0.8) gates quality without user review in v1
 
 ---
 

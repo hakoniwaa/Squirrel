@@ -1,4 +1,10 @@
-"""PROMPT-001: User Scanner agent."""
+"""PROMPT-001: User Scanner agent.
+
+Scans user messages from a completed session to identify
+which messages contain behavioral patterns worth extracting.
+
+Timing: Called at session-end (idle timeout or explicit flush), not per-message.
+"""
 
 import json
 import os
@@ -7,20 +13,30 @@ from openai import AsyncOpenAI
 
 from sqrl.models.extraction import ScannerOutput
 
-SYSTEM_PROMPT = """You scan user messages to detect corrections or preferences.
+SYSTEM_PROMPT = """You scan user messages from a coding session to identify behavioral patterns.
 
-Look for signals like corrections, frustration, or preference statements.
+Look for messages where:
+- User corrects AI behavior ("no, use X instead", "don't do Y")
+- User expresses preferences ("I prefer...", "always...", "never...")
+- User shows frustration with AI's approach
+- User redirects AI's direction
 
-Skip messages that are just acknowledgments ("ok", "sure", "continue", "looks good").
+Skip messages that are:
+- Just acknowledgments ("ok", "sure", "continue", "looks good")
+- Questions or requests without correction intent
+- One-off task instructions unrelated to preferences
 
 Output JSON only:
-{"needs_context": true, "trigger_index": 1}
+{"has_patterns": true, "indices": [1, 5, 12]}
 or
-{"needs_context": false, "trigger_index": null}"""
+{"has_patterns": false, "indices": []}"""
 
 
 class UserScanner:
-    """User Scanner using raw OpenAI client."""
+    """User Scanner using raw OpenAI client.
+
+    Scans user messages at session-end to identify behavioral patterns.
+    """
 
     def __init__(self) -> None:
         self.client = AsyncOpenAI(
@@ -30,14 +46,21 @@ class UserScanner:
         self.model = os.getenv("SQRL_CHEAP_MODEL", "google/gemini-2.0-flash-001")
 
     async def scan(self, user_messages: list[str]) -> ScannerOutput:
-        """Scan user messages for correction signals."""
+        """Scan user messages for behavioral patterns.
+
+        Args:
+            user_messages: All user messages from the session.
+
+        Returns:
+            ScannerOutput with has_patterns flag and indices of flagged messages.
+        """
         messages_text = "\n".join(
             f"[{i}] {msg}" for i, msg in enumerate(user_messages)
         )
-        user_prompt = f"""USER MESSAGES:
+        user_prompt = f"""USER MESSAGES FROM SESSION:
 {messages_text}
 
-Does any message indicate a correction or preference? Return JSON only."""
+Which messages (if any) contain behavioral patterns worth extracting? Return JSON with indices."""
 
         response = await self.client.chat.completions.create(
             model=self.model,
@@ -58,4 +81,4 @@ Does any message indicate a correction or preference? Return JSON only."""
             data = json.loads(content.strip())
             return ScannerOutput(**data)
         except (json.JSONDecodeError, ValueError):
-            return ScannerOutput(needs_context=False)
+            return ScannerOutput(has_patterns=False, indices=[])

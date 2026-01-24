@@ -4,74 +4,107 @@ All LLM prompts with stable IDs and model tier assignments.
 
 ## Model Configuration
 
-Squirrel uses Gemini 3.0 Flash for both stages. Configured via LiteLLM.
+Squirrel uses different models for each stage based on task complexity.
 
-| Stage | Default Model |
-|-------|---------------|
-| User Scanner | `gemini/gemini-3.0-flash` |
-| Memory Extractor | `gemini/gemini-3.0-flash` |
+| Stage | Default Model | Rationale |
+|-------|---------------|-----------|
+| User Scanner | `google/gemini-3-flash-preview` | Simple detection, high throughput |
+| Memory Extractor | `google/gemini-3-pro-preview` | Complex reasoning, quality matters |
 
-**Configuration:** Users can override via `SQRL_CHEAP_MODEL` and `SQRL_STRONG_MODEL` environment variables.
+**Configuration:** Override via `SQRL_CHEAP_MODEL` and `SQRL_STRONG_MODEL` environment variables.
 
 **No embedding model** - v1 uses simple use_count ordering, no semantic search.
 
 ---
 
+## Extraction Flow
+
+```
+Session ends (idle timeout or explicit flush)
+    ↓
+Stage 1 (Flash): Scan user messages only
+    "Which messages contain behavioral patterns worth extracting?"
+    → Returns: indices of flagged messages
+    ↓
+Stage 2 (Pro): Only flagged messages + AI context
+    "What should AI do differently?"
+    → Input: flagged_msg + 3 AI turns before
+    → Output: memories with confidence > 0.8
+```
+
+**Key Design Decisions:**
+- **Session-end processing**: Full context available, reduces mid-conversation noise
+- **Two-stage pipeline**: Flash filters cheaply, Pro only sees relevant slices
+- **Confidence threshold**: Only store memories with confidence > 0.8 (no user review in v1)
+
+---
+
 ## PROMPT-001: User Scanner
 
-**Model:** `gemini/gemini-3.0-flash` (configurable via `SQRL_CHEAP_MODEL`)
+**Model:** `google/gemini-3-flash-preview` (configurable via `SQRL_CHEAP_MODEL`)
 
 **ID:** PROMPT-001-USER-SCANNER
 
-**Purpose:** Scan user messages only (no AI messages) to detect if any message indicates a correction or preference worth remembering.
+**Purpose:** Scan user messages from a completed session to identify which messages contain behavioral patterns worth extracting.
 
-**Core Insight:** Only process user messages first (minimal tokens). If correction detected, pull AI context later.
+**Timing:** Called at session-end (idle timeout or explicit flush), not per-message.
+
+**Core Insight:** Only process user messages first (minimal tokens). If patterns detected, pull AI context later for Stage 2.
 
 **Input Variables:**
 
 | Variable | Type | Description |
 |----------|------|-------------|
-| user_messages | array | List of user messages only (no AI responses) |
+| user_messages | array | All user messages from the session (no AI responses) |
 
 **System Prompt:**
 ```
-You scan user messages to detect corrections or preferences.
+You scan user messages from a coding session to identify behavioral patterns.
 
-Look for signals like corrections, frustration, or preference statements.
+Look for messages where:
+- User corrects AI behavior ("no, use X instead", "don't do Y")
+- User expresses preferences ("I prefer...", "always...", "never...")
+- User shows frustration with AI's approach
+- User redirects AI's direction
 
-Skip messages that are just acknowledgments ("ok", "sure", "continue", "looks good").
+Skip messages that are:
+- Just acknowledgments ("ok", "sure", "continue", "looks good")
+- Questions or requests without correction intent
+- One-off task instructions unrelated to preferences
 
 Output JSON only:
-{"needs_context": true, "trigger_index": 1}
+{"has_patterns": true, "indices": [1, 5, 12]}
 or
-{"needs_context": false, "trigger_index": null}
+{"has_patterns": false, "indices": []}
 ```
 
 **User Prompt Template:**
 ```
-USER MESSAGES:
+USER MESSAGES FROM SESSION:
 {user_messages}
 
-Does any message indicate a correction or preference? Return JSON only.
+Which messages (if any) contain behavioral patterns worth extracting? Return JSON with indices.
 ```
 
 ---
 
 ## PROMPT-002: Memory Extractor
 
-**Model:** `gemini/gemini-3.0-flash` (configurable via `SQRL_STRONG_MODEL`)
+**Model:** `google/gemini-3-pro-preview` (configurable via `SQRL_STRONG_MODEL`)
 
 **ID:** PROMPT-002-MEMORY-EXTRACTOR
 
-**Purpose:** Extract memories from user corrections. Distinguish between global preferences and project-specific AI mistakes.
+**Purpose:** Extract actionable memories from flagged messages. Focus on "what should AI do differently in future sessions?"
 
-**Core Insight:** All memories come from user corrections. The question is: is this a global preference or a project-specific issue?
+**Timing:** Called only for messages flagged by Stage 1.
+
+**Core Insight:** We're not capturing "corrections" - we're capturing **behavioral adjustments** that help future AI sessions.
 
 **Input Variables:**
 
 | Variable | Type | Description |
 |----------|------|-------------|
-| trigger_message | string | The user message that triggered (from User Scanner) |
+| trigger_message | string | The user message flagged by Stage 1 |
 | ai_context | string | The 3 AI turns before the trigger message |
 | project_id | string | Project identifier |
 | project_root | string | Absolute path to project |
@@ -82,22 +115,40 @@ Does any message indicate a correction or preference? Return JSON only.
 
 **System Prompt:**
 ```
-Extract memories from user corrections. Output JSON only.
+Extract behavioral adjustments from user feedback. Output JSON only.
 
-User Style = global preference (all projects)
-Project Memory = this project only
+Your task: What should AI do DIFFERENTLY in future sessions?
+
+User Style = global preference (applies to ALL projects)
+Project Memory = specific to THIS project only
 
 Example output:
-{"user_styles": [{"op": "ADD", "text": "never use emoji"}], "project_memories": []}
+{
+  "user_styles": [
+    {"op": "ADD", "text": "never use emoji", "confidence": 0.9}
+  ],
+  "project_memories": []
+}
 
 Another example:
-{"user_styles": [], "project_memories": [{"op": "ADD", "category": "backend", "text": "use httpx"}]}
+{
+  "user_styles": [],
+  "project_memories": [
+    {"op": "ADD", "category": "backend", "text": "use httpx not requests", "confidence": 0.85}
+  ]
+}
 
 Rules:
-- Each item MUST be an object with "op" and "text" fields
 - op: "ADD", "UPDATE", or "DELETE"
 - category (project only): "frontend", "backend", "docs_test", "other"
-- Return empty arrays if not worth remembering
+- confidence: 0.0-1.0 (only memories with confidence > 0.8 will be stored)
+- Empty arrays if nothing worth remembering
+
+Do NOT extract:
+- One-off tasks ("make a video about X")
+- Temporary debugging steps
+- Universal best practices everyone knows
+- Things that only apply to this exact moment
 ```
 
 **User Prompt Template:**
@@ -107,11 +158,13 @@ PROJECT: {project_id}
 EXISTING USER STYLES: {existing_user_styles}
 EXISTING PROJECT MEMORIES: {existing_project_memories}
 
-AI CONTEXT:
+AI CONTEXT (what AI did before user's message):
 {ai_context}
 
-USER MESSAGE:
+USER MESSAGE (the feedback):
 {trigger_message}
+
+What behavioral adjustments should be remembered for future sessions?
 ```
 
 ---
