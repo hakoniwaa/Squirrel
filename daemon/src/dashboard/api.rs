@@ -22,6 +22,8 @@ pub fn routes() -> Router {
         .route("/projects/{id}/memories", get(list_memories))
         .route("/projects/{id}/memories", post(add_memory))
         .route("/projects/{id}/memories/{mid}", delete(delete_memory))
+        .route("/config/api", get(get_api_config))
+        .route("/config/api", post(save_api_config))
 }
 
 // === Status ===
@@ -226,6 +228,55 @@ async fn delete_memory(Path((id, mid)): Path<(String, String)>) -> StatusCode {
     match storage::delete_project_memory(path, &mid) {
         Ok(true) => StatusCode::NO_CONTENT,
         Ok(false) => StatusCode::NOT_FOUND,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+// === API Config ===
+
+#[derive(Serialize)]
+struct ApiConfigResponse {
+    has_api_key: bool,
+    model: Option<String>,
+}
+
+async fn get_api_config() -> Json<ApiConfigResponse> {
+    let config = storage::get_user_api_config().unwrap_or_default();
+
+    Json(ApiConfigResponse {
+        has_api_key: config.openrouter_api_key.is_some(),
+        model: config.model,
+    })
+}
+
+#[derive(Deserialize)]
+struct SaveApiConfigRequest {
+    openrouter_api_key: Option<String>,
+    model: Option<String>,
+}
+
+async fn save_api_config(Json(req): Json<SaveApiConfigRequest>) -> StatusCode {
+    // Load existing config to preserve fields not being updated
+    let mut config = storage::get_user_api_config().unwrap_or_default();
+
+    // Update fields if provided
+    if let Some(key) = req.openrouter_api_key {
+        if key.is_empty() {
+            config.openrouter_api_key = None;
+        } else {
+            config.openrouter_api_key = Some(key);
+        }
+    }
+    if let Some(model) = req.model {
+        if model.is_empty() {
+            config.model = None;
+        } else {
+            config.model = Some(model);
+        }
+    }
+
+    match storage::save_user_api_config(&config) {
+        Ok(_) => StatusCode::OK,
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }

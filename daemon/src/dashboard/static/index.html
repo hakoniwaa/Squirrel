@@ -277,6 +277,7 @@
       styles: [],
       projects: [],
       status: null,
+      apiConfig: null,
     };
 
     // Navigation
@@ -325,6 +326,24 @@
     async function fetchProjects() {
       const res = await fetch(`${API}/projects`);
       state.projects = await res.json();
+    }
+
+    async function fetchApiConfig() {
+      const res = await fetch(`${API}/config/api`);
+      state.apiConfig = await res.json();
+    }
+
+    async function saveApiConfig(apiKey, model) {
+      await fetch(`${API}/config/api`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          openrouter_api_key: apiKey || null,
+          model: model || null,
+        }),
+      });
+      await fetchApiConfig();
+      render();
     }
 
     // Render
@@ -411,9 +430,38 @@
     }
 
     function renderSettings() {
+      const hasKey = state.apiConfig?.has_api_key;
+      const model = state.apiConfig?.model || '';
+
       return `
         <h1>Settings</h1>
         <p class="subtitle">Configure Squirrel behavior</p>
+
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">API Configuration</span>
+          </div>
+          <p style="margin-bottom: 16px; color: var(--text-secondary);">
+            Squirrel uses OpenRouter to access AI models. Get your API key at
+            <a href="https://openrouter.ai/keys" target="_blank">openrouter.ai/keys</a>
+          </p>
+          <div style="margin-bottom: 12px;">
+            <label style="display: block; font-weight: 500; margin-bottom: 4px;">OpenRouter API Key</label>
+            <input type="password" class="input" id="api-key" placeholder="${hasKey ? '••••••••••••••••' : 'sk-or-v1-...'}" style="width: 100%; max-width: 400px;">
+            ${hasKey ? '<span style="color: var(--success); margin-left: 8px; font-size: 12px;">✓ Configured</span>' : ''}
+          </div>
+          <div style="margin-bottom: 16px;">
+            <label style="display: block; font-weight: 500; margin-bottom: 4px;">Model</label>
+            <select class="input" id="model-select" style="width: 100%; max-width: 400px;">
+              <option value="openrouter/anthropic/claude-3.5-sonnet" ${model === 'openrouter/anthropic/claude-3.5-sonnet' ? 'selected' : ''}>Claude 3.5 Sonnet (Recommended)</option>
+              <option value="openrouter/google/gemini-2.0-flash" ${model === 'openrouter/google/gemini-2.0-flash' ? 'selected' : ''}>Gemini 2.0 Flash</option>
+              <option value="openrouter/google/gemini-pro" ${model === 'openrouter/google/gemini-pro' ? 'selected' : ''}>Gemini Pro</option>
+              <option value="openrouter/openai/gpt-4o" ${model === 'openrouter/openai/gpt-4o' ? 'selected' : ''}>GPT-4o</option>
+            </select>
+          </div>
+          <button class="btn btn-primary" id="save-api-config">Save</button>
+        </div>
+
         <div class="card">
           <div class="card-header">
             <span class="card-title">Daemon</span>
@@ -449,6 +497,18 @@
           deleteStyle(btn.dataset.deleteStyle);
         });
       });
+
+      // Save API config
+      const saveApiBtn = document.getElementById('save-api-config');
+      const apiKeyInput = document.getElementById('api-key');
+      const modelSelect = document.getElementById('model-select');
+      if (saveApiBtn && apiKeyInput && modelSelect) {
+        saveApiBtn.addEventListener('click', () => {
+          const apiKey = apiKeyInput.value.trim();
+          const model = modelSelect.value;
+          saveApiConfig(apiKey || null, model);
+        });
+      }
     }
 
     function escapeHtml(text) {
@@ -460,7 +520,7 @@
     // Initialize
     async function init() {
       document.getElementById('content').innerHTML = '<p class="loading">Loading...</p>';
-      await Promise.all([fetchStatus(), fetchStyles(), fetchProjects()]);
+      await Promise.all([fetchStatus(), fetchStyles(), fetchProjects(), fetchApiConfig()]);
       render();
     }
 

@@ -4,6 +4,7 @@
 //! SCHEMA-002: project_memories in <repo>/.sqrl/memory.db
 //! SCHEMA-006: doc_debt in <repo>/.sqrl/memory.db
 
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use chrono;
@@ -12,6 +13,53 @@ use serde::{Deserialize, Serialize};
 use serde_json;
 
 use crate::error::Error;
+
+// === User API Config ===
+
+/// User API configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UserApiConfig {
+    #[serde(default)]
+    pub openrouter_api_key: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+/// Get user config path.
+fn user_config_path() -> Result<PathBuf, Error> {
+    let home = dirs::home_dir().ok_or(Error::HomeDirNotFound)?;
+    Ok(home.join(".sqrl").join("api_config.yaml"))
+}
+
+/// Load user API config.
+pub fn get_user_api_config() -> Result<UserApiConfig, Error> {
+    let path = user_config_path()?;
+    if !path.exists() {
+        return Ok(UserApiConfig::default());
+    }
+    let content = fs::read_to_string(&path)?;
+    let config: UserApiConfig =
+        serde_yaml::from_str(&content).map_err(|e| Error::ConfigParse(e.to_string()))?;
+    Ok(config)
+}
+
+/// Save user API config.
+pub fn save_user_api_config(config: &UserApiConfig) -> Result<(), Error> {
+    let path = user_config_path()?;
+
+    // Ensure directory exists
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let content = serde_yaml::to_string(config).map_err(|e| Error::ConfigParse(e.to_string()))?;
+    let with_header = format!(
+        "# Squirrel API configuration\n# Do not share this file - it contains sensitive keys\n\n{}",
+        content
+    );
+    fs::write(&path, with_header)?;
+    Ok(())
+}
 
 /// User style preference.
 #[derive(Debug, Clone, Serialize, Deserialize)]
