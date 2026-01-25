@@ -49,9 +49,8 @@ pub fn get_user_styles() -> Result<Vec<UserStyle>, Error> {
 
     let conn = Connection::open(&db_path)?;
 
-    let mut stmt = conn.prepare(
-        "SELECT id, text, use_count FROM user_styles ORDER BY use_count DESC",
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT id, text, use_count FROM user_styles ORDER BY use_count DESC")?;
 
     let styles = stmt
         .query_map([], |row| {

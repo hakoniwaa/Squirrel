@@ -6,6 +6,8 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 mod cli;
 mod error;
 mod ipc;
+mod mcp;
+mod storage;
 mod watcher;
 
 pub use error::Error;
@@ -47,6 +49,10 @@ enum Commands {
     /// Internal: run the watcher daemon (used by system service)
     #[command(hide = true)]
     WatchDaemon,
+
+    /// Internal: run MCP server (used by AI tools)
+    #[command(hide = true)]
+    Mcp,
 }
 
 #[tokio::main]
@@ -83,6 +89,9 @@ async fn main() -> Result<(), Error> {
         }
         Some(Commands::WatchDaemon) => {
             cli::watch::run_daemon().await?;
+        }
+        Some(Commands::Mcp) => {
+            mcp::run()?;
         }
     }
 
