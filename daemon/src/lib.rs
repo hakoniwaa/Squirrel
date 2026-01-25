@@ -3,6 +3,7 @@
 //! Local-first memory system for AI coding tools.
 
 pub mod cli;
+pub mod dashboard;
 pub mod error;
 pub mod ipc;
 pub mod mcp;

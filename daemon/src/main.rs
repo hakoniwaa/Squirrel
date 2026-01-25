@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 mod cli;
+mod dashboard;
 mod error;
 mod ipc;
 mod mcp;
@@ -56,6 +57,14 @@ enum Commands {
     /// Internal: run MCP server (used by AI tools)
     #[command(hide = true)]
     Mcp,
+
+    /// Internal: run dashboard server
+    #[command(hide = true)]
+    Dashboard {
+        /// Port to listen on
+        #[arg(long, default_value_t = dashboard::DEFAULT_PORT)]
+        port: u16,
+    },
 }
 
 #[tokio::main]
@@ -101,6 +110,9 @@ async fn main() -> Result<(), Error> {
         }
         Some(Commands::Mcp) => {
             mcp::run()?;
+        }
+        Some(Commands::Dashboard { port }) => {
+            dashboard::serve(port).await?;
         }
     }
 
