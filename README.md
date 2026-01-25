@@ -4,12 +4,10 @@ Memory layer for AI coding agents. Fully automatic.
 
 ## Why Squirrel
 
-| Problem | Squirrel Solution |
-|---------|-------------------|
-| AI forgets your coding style every session | **Vibe coding works.** The more you code, the more AI learns your preferences. |
-| AI repeats the same project mistakes | **Mistakes remembered.** Past errors become future prevention. |
-| Docs get stale after code changes | **Docs stay fresh.** Automatic detection when docs need updates. |
-| Team knowledge lives in people's heads | **Team memory persists.** Project knowledge survives member changes. |
+- **Vibe coding works.** AI learns your style the more you code.
+- **Mistakes remembered.** Past errors become future prevention.
+- **Docs stay fresh.** Auto-detects when docs need updates.
+- **Team memory persists.** Knowledge survives member changes.
 
 ## How It Works
 
