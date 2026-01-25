@@ -1,22 +1,29 @@
 # Squirrel
 
-Local-first memory system for AI coding agents. Watches your sessions, extracts patterns from corrections, syncs to agent config files.
+Memory layer for AI coding agents. Fully automatic.
 
-**Not a research prototype.** Production tool that makes Claude Code, Cursor, and other AI agents actually remember what you teach them.
+## Why Squirrel
+
+| Problem | Squirrel Solution |
+|---------|-------------------|
+| AI forgets your coding style every session | **Vibe coding works.** The more you code, the more AI learns your preferences. |
+| AI repeats the same project mistakes | **Mistakes remembered.** Past errors become future prevention. |
+| Docs get stale after code changes | **Docs stay fresh.** Automatic detection when docs need updates. |
+| Team knowledge lives in people's heads | **Team memory persists.** Project knowledge survives member changes. |
 
 ## How It Works
 
 ```
-You correct AI behavior during coding
+You code with AI (corrections, preferences, decisions)
         ↓
-Squirrel watches logs passively (invisible)
+Squirrel watches silently (zero manual work)
         ↓
-Memory pipeline extracts patterns
+Memory extracted automatically
         ↓
 Three outputs:
-  1. User Style    → synced to CLAUDE.md, .cursorrules, etc.
-  2. Project Memory → exposed via MCP tool
-  3. Doc Awareness  → tracks doc staleness (coming soon)
+  1. User Style    → synced to CLAUDE.md, .cursorrules
+  2. Project Memory → exposed via MCP
+  3. Doc Awareness  → detects stale docs
 ```
 
 ## Memory Architecture
@@ -57,7 +64,7 @@ squirrel_get_memory → returns:
 
 **Access:** MCP tool `squirrel_get_memory`
 
-### Doc Awareness (Coming Soon)
+### Doc Awareness
 
 Indexes project docs, detects when code changes but docs don't.
 
@@ -67,35 +74,57 @@ Indexes project docs, detects when code changes but docs don't.
 | Doc Debt | Detects stale docs after commits |
 | Auto Hooks | Git hooks remind to update docs |
 
-## Installation
+## Supported Tools
+
+Claude Code, Cursor, Codex CLI (others coming)
+
+## Quick Start
+
+> **v1 releasing in one week.**
 
 ```bash
-# Initialize in project
+# Configure API key and select your tools
+sqrl config
+
+# Initialize in any project (new or existing)
 cd ~/my-project
 sqrl init
-
-# Daemon runs as system service (auto-started)
 ```
 
 ## CLI
 
 | Command | Description |
 |---------|-------------|
-| `sqrl init` | Initialize project, start daemon |
+| `sqrl init` | Initialize project |
 | `sqrl on` | Enable watcher |
 | `sqrl off` | Disable watcher |
-| `sqrl config` | Open Dashboard in browser |
+| `sqrl config` | Open Dashboard |
 | `sqrl status` | Show status |
-| `sqrl goaway` | Remove Squirrel from project |
 
-## Supported Tools
+## For Teams (Cloud)
 
-| Tool | Logs | Style Sync | MCP |
-|------|------|------------|-----|
-| Claude Code | ✓ | ✓ | ✓ |
-| Cursor | ✓ | ✓ | ✓ |
-| Codex CLI | ✓ | ✓ | - |
-| Gemini CLI | ✓ | ✓ | - |
+Squirrel Cloud: shared memory across your engineering team.
+
+| Why Teams Need This |
+|---------------------|
+| New members get project context instantly via AI |
+| Corrections from any member benefit everyone |
+| Project knowledge survives when people leave |
+| Consistent coding standards across the team |
+
+### Cloud Features
+
+| Feature | Free | Team |
+|---------|------|------|
+| User style sync | ✓ | ✓ |
+| Project memory | ✓ | ✓ |
+| Doc awareness | ✓ | ✓ |
+| **Shared team memory** | - | ✓ |
+| **Cross-machine sync** | - | ✓ |
+| **Team management** | - | ✓ |
+| **Analytics dashboard** | - | ✓ |
+
+**Interested in Squirrel for your team?** Contact us: [team@squirrel.dev](mailto:team@squirrel.dev)
 
 ## Architecture
 
@@ -103,28 +132,13 @@ sqrl init
 Rust Daemon          Python Memory Service
 (I/O, storage, MCP)  (LLM operations)
        │                    │
-       └──── IPC (Unix socket, JSON-RPC 2.0) ────┘
+       └──── IPC ───────────┘
 ```
 
 | Component | Responsibility |
 |-----------|----------------|
 | Rust Daemon | Log watching, SQLite, MCP server, CLI, Dashboard |
-| Python Service | User Scanner, Memory Extractor, Style Syncer |
-
-**Local-first:** All data on your machine. LLM calls only for extraction.
-
-## Team Features (Cloud)
-
-| Feature | Free | Team |
-|---------|------|------|
-| User style sync | ✓ | ✓ |
-| Project memory | ✓ | ✓ |
-| Doc awareness | ✓ | ✓ |
-| Team shared memory | - | ✓ |
-| Cross-machine sync | - | ✓ |
-| Analytics | - | ✓ |
-
-**Cloud launching soon.**
+| Python Service | Log cleaning, memory extraction, style sync |
 
 ## Development
 
@@ -135,8 +149,6 @@ devenv shell
 
 test-all     # Run tests
 dev-daemon   # Start dev daemon
-fmt          # Format code
-lint         # Lint code
 ```
 
 ## License
