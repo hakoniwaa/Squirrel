@@ -25,22 +25,39 @@ pub struct UserApiConfig {
     pub model: Option<String>,
 }
 
-/// Get user config path.
-fn user_config_path() -> Result<PathBuf, Error> {
-    let home = dirs::home_dir().ok_or(Error::HomeDirNotFound)?;
-    Ok(home.join(".sqrl").join("api_config.yaml"))
+/// Global config TOML structure (for reading ~/.sqrl/config.toml).
+#[derive(Debug, Deserialize, Default)]
+struct GlobalConfig {
+    #[serde(default)]
+    llm: LlmConfig,
 }
 
-/// Load user API config.
+#[derive(Debug, Deserialize, Default)]
+struct LlmConfig {
+    strong_model: Option<String>,
+    openrouter_api_key: Option<String>,
+}
+
+/// Get user config path (TOML).
+fn user_config_path() -> Result<PathBuf, Error> {
+    let home = dirs::home_dir().ok_or(Error::HomeDirNotFound)?;
+    Ok(home.join(".sqrl").join("config.toml"))
+}
+
+/// Load user API config from ~/.sqrl/config.toml.
 pub fn get_user_api_config() -> Result<UserApiConfig, Error> {
     let path = user_config_path()?;
     if !path.exists() {
         return Ok(UserApiConfig::default());
     }
     let content = fs::read_to_string(&path)?;
-    let config: UserApiConfig =
-        serde_yaml::from_str(&content).map_err(|e| Error::ConfigParse(e.to_string()))?;
-    Ok(config)
+    let config: GlobalConfig =
+        toml::from_str(&content).map_err(|e| Error::ConfigParse(e.to_string()))?;
+
+    Ok(UserApiConfig {
+        openrouter_api_key: config.llm.openrouter_api_key.filter(|s| !s.is_empty()),
+        model: config.llm.strong_model.filter(|s| !s.is_empty()),
+    })
 }
 
 /// Save user API config.

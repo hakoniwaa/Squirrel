@@ -764,12 +764,27 @@ pub fn start_python_service() -> Result<(), Error> {
         fs::create_dir_all(parent)?;
     }
 
-    // Check for required environment variable
-    if std::env::var("SQRL_STRONG_MODEL").is_err() {
-        warn!("SQRL_STRONG_MODEL not set - Python Memory Service will not start");
-        warn!("Set SQRL_STRONG_MODEL to a LiteLLM model ID (e.g., 'openrouter/anthropic/claude-3.5-sonnet')");
-        return Ok(());
-    }
+    // Get API config from storage (dashboard settings)
+    let api_config = crate::storage::get_user_api_config().unwrap_or_default();
+
+    // Determine model: storage config > environment variable
+    let model = api_config
+        .model
+        .or_else(|| std::env::var("SQRL_STRONG_MODEL").ok());
+
+    let model = match model {
+        Some(m) if !m.is_empty() => m,
+        _ => {
+            warn!("No model configured - Python Memory Service will not start");
+            warn!("Configure via dashboard or set SQRL_STRONG_MODEL environment variable");
+            return Ok(());
+        }
+    };
+
+    // Determine API key: storage config > environment variable
+    let api_key = api_config
+        .openrouter_api_key
+        .or_else(|| std::env::var("OPENROUTER_API_KEY").ok());
 
     // Find Python executable
     let python = match find_python() {
@@ -779,7 +794,7 @@ pub fn start_python_service() -> Result<(), Error> {
             return Ok(());
         }
     };
-    info!(python = %python.display(), "Using Python");
+    info!(python = %python.display(), model = %model, "Starting Python Memory Service");
 
     // Open log file
     let log = fs::OpenOptions::new()
@@ -788,31 +803,34 @@ pub fn start_python_service() -> Result<(), Error> {
         .open(&log_path)?;
     let log_err = log.try_clone()?;
 
+    // Build command with environment variables
+    let mut cmd = Command::new(&python);
+    cmd.args(["-m", "sqrl", "serve"])
+        .env("SQRL_STRONG_MODEL", &model)
+        .stdout(log)
+        .stderr(log_err)
+        .stdin(std::process::Stdio::null());
+
+    // Set API key if available
+    if let Some(key) = api_key {
+        cmd.env("OPENROUTER_API_KEY", key);
+    }
+
     // Spawn Python service
     #[cfg(unix)]
     let child = {
         use std::os::unix::process::CommandExt;
         unsafe {
-            Command::new(&python)
-                .args(["-m", "sqrl", "serve"])
-                .stdout(log)
-                .stderr(log_err)
-                .stdin(std::process::Stdio::null())
-                .pre_exec(|| {
-                    libc::setsid();
-                    Ok(())
-                })
-                .spawn()
+            cmd.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            })
+            .spawn()
         }
     };
 
     #[cfg(windows)]
-    let child = Command::new(&python)
-        .args(["-m", "sqrl", "serve"])
-        .stdout(log)
-        .stderr(log_err)
-        .stdin(std::process::Stdio::null())
-        .spawn();
+    let child = cmd.spawn();
 
     match child {
         Ok(c) => {
