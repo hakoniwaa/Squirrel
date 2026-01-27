@@ -90,8 +90,8 @@ High-level system boundaries and data flow.
 
 | Module | Purpose |
 |--------|---------|
-| Log Watcher | File system events for AI tool logs (notify) |
-| Doc Watcher | File system events for project docs (notify) |
+| Log Watcher | File system events for AI tool logs (notify PollWatcher, ADR-020) |
+| Doc Watcher | File system events for project docs (notify PollWatcher) |
 | Git Watcher | Detects `.git/` creation, auto-installs hooks |
 | MCP Server | Serves memories + doc tree to AI tools (rmcp) |
 | CLI Handler | `sqrl init`, `sqrl on/off`, `sqrl goaway`, `sqrl config`, `sqrl status` (clap) |
@@ -420,7 +420,7 @@ Local daemon extract → Push to cloud → Cloud deduplicates/merges → Sync to
 | IPC | JSON-RPC 2.0 | Over Unix socket |
 | MCP SDK | rmcp | Official Rust SDK |
 | CLI | clap | Minimal commands |
-| File Watching | notify | Cross-platform |
+| File Watching | notify (PollWatcher) | WSL/9p compatible (ADR-020) |
 | **Python Service** | | |
 | LLM Client | LiteLLM | Multi-provider |
 | Agent Framework | PydanticAI | Structured outputs |

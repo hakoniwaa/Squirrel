@@ -461,6 +461,33 @@ Hooks are hidden internal commands, not user-facing.
 
 ---
 
+## ADR-020: Poll-Based File Watching for WSL Compatibility
+
+**Status:** accepted
+**Date:** 2025-01-27
+
+**Context:**
+The file watcher using `notify` crate's `RecommendedWatcher` (inotify on Linux) fails silently on WSL2 when watching `~/.claude/projects/`. This directory resides on Windows filesystem mounted via 9p (`/mnt/c`), where inotify events are not propagated.
+
+**Decision:**
+Use `PollWatcher` instead of `RecommendedWatcher` with a 2-second polling interval. This works across all filesystem types including 9p/drvfs mounts.
+
+```rust
+let config = Config::default()
+    .with_poll_interval(Duration::from_secs(2));
+let watcher = PollWatcher::new(callback, config)?;
+```
+
+**Consequences:**
+- (+) Works on WSL2 with Windows-mounted directories
+- (+) Works consistently across all platforms
+- (+) No silent failures on unsupported filesystems
+- (-) 2-second latency before detecting changes (vs immediate with inotify)
+- (-) Higher CPU usage due to polling
+- (-) Scales worse with many watched files
+
+---
+
 ## Deprecated ADRs
 
 | ADR | Status | Reason |

@@ -10,7 +10,7 @@ globs: ["daemon/**/*.rs", "Cargo.toml", "Cargo.lock"]
 The Rust daemon handles ALL local I/O and NEVER contains LLM logic.
 
 Daemon responsibilities:
-- File watching (notify crate)
+- File watching (notify PollWatcher, ADR-020)
 - MCP server (rmcp crate)
 - CLI commands (clap crate)
 - SQLite storage (rusqlite + sqlite-vec)
@@ -26,7 +26,7 @@ Daemon NEVER:
 | Purpose | Crate |
 |---------|-------|
 | Async runtime | tokio |
-| File watching | notify |
+| File watching | notify (PollWatcher) |
 | MCP server | rmcp |
 | CLI parsing | clap |
 | SQLite | rusqlite |
