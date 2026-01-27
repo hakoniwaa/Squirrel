@@ -259,7 +259,12 @@ impl LogParser {
         if text.len() <= self.max_content_length {
             text.to_string()
         } else {
-            format!("{}...", &text[..self.max_content_length])
+            // Find a valid UTF-8 boundary at or before max_content_length
+            let mut end = self.max_content_length;
+            while end > 0 && !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            format!("{}...", &text[..end])
         }
     }
 }

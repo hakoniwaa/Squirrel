@@ -104,27 +104,12 @@ impl SessionTracker {
         }
     }
 
-    /// Process a log entry and return any completed sessions.
-    pub fn process_entry(&mut self, entry: LogEntry) -> Vec<CompletedSession> {
-        let mut completed = Vec::new();
-
-        // Check for idle sessions before processing new entry
-        let idle_session_ids: Vec<String> = self
-            .sessions
-            .iter()
-            .filter(|(_, s)| s.is_idle())
-            .map(|(id, _)| id.clone())
-            .collect();
-
-        for session_id in idle_session_ids {
-            if let Some(session) = self.sessions.remove(&session_id) {
-                if session.has_events() {
-                    completed.push(self.complete_session(session));
-                }
-            }
-        }
-
-        // Process the new entry
+    /// Process a log entry.
+    ///
+    /// Events are accumulated in sessions. Use `check_idle_sessions()` periodically
+    /// to retrieve completed sessions after idle timeout.
+    pub fn process_entry(&mut self, entry: LogEntry) {
+        // Process the new entry (no idle check here - done periodically via check_idle_sessions)
         if let Some((session_id, event, cwd)) = self.extract_event(&entry) {
             let session = self
                 .sessions
@@ -133,8 +118,6 @@ impl SessionTracker {
 
             session.add_event(event);
         }
-
-        completed
     }
 
     /// Force flush all sessions (for explicit flush command).

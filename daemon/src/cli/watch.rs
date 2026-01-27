@@ -109,9 +109,7 @@ fn process_file(
 
     // Process entries through session tracker
     for entry in entries {
-        let _completed = session_tracker.process_entry(entry);
-        // Note: We don't send completed sessions immediately here
-        // They will be sent on the next idle check
+        session_tracker.process_entry(entry);
     }
 
     // Update position

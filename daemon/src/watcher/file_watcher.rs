@@ -2,11 +2,15 @@
 
 use std::path::PathBuf;
 use std::sync::mpsc;
+use std::time::Duration;
 
-use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{Config, EventKind, PollWatcher, RecursiveMode, Watcher};
 use tracing::{debug, info, warn};
 
 use crate::Error;
+
+/// Poll interval for watching file changes (WSL/9p filesystems don't support inotify).
+const POLL_INTERVAL_SECS: u64 = 2;
 
 /// Events emitted by the file watcher.
 #[derive(Debug, Clone)]
@@ -18,14 +22,18 @@ pub enum WatchEvent {
 }
 
 /// Watches ~/.claude/projects for log file changes.
+/// Uses poll-based watching for compatibility with WSL/9p filesystems.
 pub struct FileWatcher {
-    watcher: RecommendedWatcher,
+    watcher: PollWatcher,
     rx: mpsc::Receiver<WatchEvent>,
     claude_dir: PathBuf,
 }
 
 impl FileWatcher {
     /// Create a new file watcher.
+    ///
+    /// Uses poll-based watching for compatibility with WSL/9p filesystems
+    /// where inotify doesn't work.
     pub fn new() -> Result<Self, Error> {
         let home = dirs::home_dir().ok_or(Error::HomeDirNotFound)?;
         let claude_dir = home.join(".claude").join("projects");
@@ -36,7 +44,11 @@ impl FileWatcher {
 
         let (tx, rx) = mpsc::channel();
 
-        let watcher = RecommendedWatcher::new(
+        // Use PollWatcher for WSL/9p filesystem compatibility
+        // inotify doesn't work on 9p mounted filesystems (Windows drives in WSL)
+        let config = Config::default().with_poll_interval(Duration::from_secs(POLL_INTERVAL_SECS));
+
+        let watcher = PollWatcher::new(
             move |res: Result<notify::Event, notify::Error>| {
                 match res {
                     Ok(event) => {
@@ -66,7 +78,7 @@ impl FileWatcher {
                     }
                 }
             },
-            Config::default(),
+            config,
         )?;
 
         Ok(Self {

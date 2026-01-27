@@ -117,36 +117,8 @@ pub async fn process_history(
                 Ok(entry) => {
                     stats.entries_parsed += 1;
 
-                    // Process entry through session tracker
-                    let completed = tracker.process_entry(entry);
-
-                    // Send any completed sessions to the service
-                    for session in completed {
-                        stats.sessions_found += 1;
-                        if !session.events.is_empty() {
-                            let request = ProcessEpisodeRequest {
-                                project_id: session.project_id,
-                                project_root: session.project_root,
-                                events: session.events,
-                                existing_user_styles: vec![],
-                                existing_project_memories: vec![],
-                            };
-
-                            match ipc_client.process_episode(request).await {
-                                Ok(_) => {
-                                    stats.sessions_processed += 1;
-                                }
-                                Err(e) => {
-                                    warn!(
-                                        session_id = %session.session_id,
-                                        error = %e,
-                                        "Failed to process historical session"
-                                    );
-                                    stats.sessions_failed += 1;
-                                }
-                            }
-                        }
-                    }
+                    // Accumulate entry in session tracker (all flushed at end)
+                    tracker.process_entry(entry);
                 }
                 Err(e) => {
                     // Skip invalid entries silently (common for summary entries etc.)
