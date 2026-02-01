@@ -5,11 +5,11 @@ use std::io::{self, Write};
 
 use tracing::warn;
 
-use crate::cli::{hooks, service};
+use crate::cli::hooks;
 use crate::error::Error;
 
 /// Run the goaway command.
-pub async fn run(force: bool) -> Result<(), Error> {
+pub fn run(force: bool) -> Result<(), Error> {
     let project_root = std::env::current_dir()?;
     let sqrl_dir = project_root.join(".sqrl");
 
@@ -22,6 +22,14 @@ pub async fn run(force: bool) -> Result<(), Error> {
     println!("This will remove:");
     println!("  .sqrl/ ({})", sqrl_dir.display());
     print_dir_contents(&sqrl_dir, 4)?;
+
+    let skill_dir = project_root
+        .join(".claude")
+        .join("skills")
+        .join("squirrel-session");
+    if skill_dir.exists() {
+        println!("  .claude/skills/squirrel-session/");
+    }
 
     // Confirm unless --force
     if !force {
@@ -46,26 +54,52 @@ pub async fn run(force: bool) -> Result<(), Error> {
         }
     }
 
-    // Stop and uninstall the services
-    if service::is_installed().unwrap_or(false) {
-        println!("Stopping and uninstalling background services...");
-        if let Err(e) = service::uninstall() {
-            warn!(error = %e, "Failed to uninstall service");
-            println!("Warning: Could not uninstall background service: {}", e);
-        }
+    // Remove skill directory
+    if skill_dir.exists() {
+        fs::remove_dir_all(&skill_dir)?;
+        println!("Skill file removed.");
     }
 
-    // Stop Python Memory Service
-    if let Err(e) = service::stop_python_service() {
-        warn!(error = %e, "Failed to stop Python Memory Service");
-    }
+    // Remove memory triggers from CLAUDE.md
+    remove_memory_triggers(&project_root);
 
-    // Remove the directory
+    // Remove .sqrl/ directory
     fs::remove_dir_all(&sqrl_dir)?;
     println!("Removed .sqrl/");
     println!("Squirrel has left the building.");
 
     Ok(())
+}
+
+/// Remove Squirrel memory triggers from CLAUDE.md.
+fn remove_memory_triggers(project_root: &std::path::Path) {
+    let claude_md_path = project_root.join(".claude").join("CLAUDE.md");
+    if !claude_md_path.exists() {
+        return;
+    }
+
+    if let Ok(content) = fs::read_to_string(&claude_md_path) {
+        if let (Some(start), Some(end)) = (
+            content.find("<!-- START Squirrel Memory Protocol -->"),
+            content.find("<!-- END Squirrel Memory Protocol -->"),
+        ) {
+            let end = end + "<!-- END Squirrel Memory Protocol -->".len();
+            let mut new_content = String::new();
+            new_content.push_str(content[..start].trim_end());
+            let after = content[end..].trim_start();
+            if !after.is_empty() {
+                new_content.push_str("\n\n");
+                new_content.push_str(after);
+            }
+            new_content.push('\n');
+
+            if let Err(e) = fs::write(&claude_md_path, new_content) {
+                warn!(error = %e, "Failed to clean CLAUDE.md");
+            } else {
+                println!("Memory triggers removed from CLAUDE.md.");
+            }
+        }
+    }
 }
 
 fn print_dir_contents(path: &std::path::Path, indent: usize) -> Result<(), Error> {

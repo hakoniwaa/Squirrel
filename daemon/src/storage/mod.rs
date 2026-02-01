@@ -1,270 +1,263 @@
-//! SQLite storage for reading memories.
+//! SQLite storage for memories and doc debt.
 //!
-//! SCHEMA-001: user_styles in ~/.sqrl/user_style.db
-//! SCHEMA-002: project_memories in <repo>/.sqrl/memory.db
-//! SCHEMA-006: doc_debt in <repo>/.sqrl/memory.db
+//! SCHEMA-001: memories in <repo>/.sqrl/memory.db
+//! SCHEMA-002: doc_debt in <repo>/.sqrl/memory.db
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use chrono;
 use rusqlite::{Connection, Result as SqliteResult};
 use serde::{Deserialize, Serialize};
-use serde_json;
 
 use crate::error::Error;
 
-// === User API Config ===
+// === Database Path ===
 
-/// User API configuration.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct UserApiConfig {
-    #[serde(default)]
-    pub openrouter_api_key: Option<String>,
-    #[serde(default)]
-    pub model: Option<String>,
+/// Get the project database path.
+fn db_path(project_root: &Path) -> PathBuf {
+    project_root.join(".sqrl").join("memory.db")
 }
 
-/// Global config TOML structure (for reading ~/.sqrl/config.toml).
-#[derive(Debug, Deserialize, Default)]
-struct GlobalConfig {
-    #[serde(default)]
-    llm: LlmConfig,
+// === Memory (SCHEMA-001) ===
+
+/// A stored memory.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Memory {
+    pub id: String,
+    pub memory_type: String,
+    pub content: String,
+    pub tags: Vec<String>,
+    pub use_count: i64,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
-#[derive(Debug, Deserialize, Default)]
-struct LlmConfig {
-    strong_model: Option<String>,
-    openrouter_api_key: Option<String>,
+/// Ensure the memories table exists.
+fn ensure_memories_table(conn: &Connection) -> SqliteResult<()> {
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS memories (
+            id           TEXT PRIMARY KEY,
+            memory_type  TEXT NOT NULL,
+            content      TEXT NOT NULL,
+            tags         TEXT DEFAULT '[]',
+            use_count    INTEGER DEFAULT 1,
+            created_at   TEXT NOT NULL,
+            updated_at   TEXT NOT NULL
+        )",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(memory_type)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_memories_use_count ON memories(use_count DESC)",
+        [],
+    )?;
+    Ok(())
 }
 
-/// Get user config path (TOML).
-fn user_config_path() -> Result<PathBuf, Error> {
-    let home = dirs::home_dir().ok_or(Error::HomeDirNotFound)?;
-    Ok(home.join(".sqrl").join("config.toml"))
-}
-
-/// Load user API config from ~/.sqrl/config.toml.
-pub fn get_user_api_config() -> Result<UserApiConfig, Error> {
-    let path = user_config_path()?;
-    if !path.exists() {
-        return Ok(UserApiConfig::default());
-    }
-    let content = fs::read_to_string(&path)?;
-    let config: GlobalConfig =
-        toml::from_str(&content).map_err(|e| Error::ConfigParse(e.to_string()))?;
-
-    Ok(UserApiConfig {
-        openrouter_api_key: config.llm.openrouter_api_key.filter(|s| !s.is_empty()),
-        model: config.llm.strong_model.filter(|s| !s.is_empty()),
-    })
-}
-
-/// Save user API config.
-pub fn save_user_api_config(config: &UserApiConfig) -> Result<(), Error> {
-    let path = user_config_path()?;
-
-    // Ensure directory exists
+/// Store a memory. Deduplicates by content (increments use_count if exists).
+pub fn store_memory(
+    project_root: &Path,
+    memory_type: &str,
+    content: &str,
+    tags: &[String],
+) -> Result<(String, bool, i64), Error> {
+    let path = db_path(project_root);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
 
-    let content = serde_yaml::to_string(config).map_err(|e| Error::ConfigParse(e.to_string()))?;
-    let with_header = format!(
-        "# Squirrel API configuration\n# Do not share this file - it contains sensitive keys\n\n{}",
-        content
-    );
-    fs::write(&path, with_header)?;
-    Ok(())
+    let conn = Connection::open(&path)?;
+    ensure_memories_table(&conn)?;
+
+    // Check for existing memory with same content
+    let existing: Option<(String, i64)> = conn
+        .query_row(
+            "SELECT id, use_count FROM memories WHERE content = ?1",
+            [content],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .ok();
+
+    if let Some((id, use_count)) = existing {
+        let new_count = use_count + 1;
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE memories SET use_count = ?1, updated_at = ?2 WHERE id = ?3",
+            rusqlite::params![new_count, now, id],
+        )?;
+        Ok((id, true, new_count))
+    } else {
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        let tags_json = serde_json::to_string(tags)?;
+
+        conn.execute(
+            "INSERT INTO memories (id, memory_type, content, tags, use_count, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6)",
+            rusqlite::params![id, memory_type, content, tags_json, now, now],
+        )?;
+        Ok((id, false, 1))
+    }
 }
 
-/// User style preference.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UserStyle {
-    pub id: String,
-    pub text: String,
-    pub use_count: i64,
-}
-
-/// Project-specific memory.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProjectMemory {
-    pub id: String,
-    pub category: String,
-    pub subcategory: String,
-    pub text: String,
-    pub use_count: i64,
-}
-
-/// Get the user styles database path.
-fn user_styles_db_path() -> Result<PathBuf, Error> {
-    let home = dirs::home_dir().ok_or(Error::HomeDirNotFound)?;
-    Ok(home.join(".sqrl").join("user_style.db"))
-}
-
-/// Get the project memories database path.
-fn project_memories_db_path(project_root: &Path) -> PathBuf {
-    project_root.join(".sqrl").join("memory.db")
-}
-
-/// Read all user styles, ordered by use_count DESC.
-pub fn get_user_styles() -> Result<Vec<UserStyle>, Error> {
-    let db_path = user_styles_db_path()?;
-
-    if !db_path.exists() {
+/// Get memories, optionally filtered by type and/or tags.
+pub fn get_memories(
+    project_root: &Path,
+    memory_type: Option<&str>,
+    tags: Option<&[String]>,
+    limit: Option<i64>,
+) -> Result<Vec<Memory>, Error> {
+    let path = db_path(project_root);
+    if !path.exists() {
         return Ok(vec![]);
     }
 
-    let conn = Connection::open(&db_path)?;
+    let conn = Connection::open(&path)?;
 
-    let mut stmt =
-        conn.prepare("SELECT id, text, use_count FROM user_styles ORDER BY use_count DESC")?;
-
-    let styles = stmt
-        .query_map([], |row| {
-            Ok(UserStyle {
-                id: row.get(0)?,
-                text: row.get(1)?,
-                use_count: row.get(2)?,
-            })
-        })?
-        .collect::<SqliteResult<Vec<_>>>()?;
-
-    Ok(styles)
-}
-
-/// Read all project memories, ordered by use_count DESC.
-pub fn get_project_memories(project_root: &Path) -> Result<Vec<ProjectMemory>, Error> {
-    let db_path = project_memories_db_path(project_root);
-
-    if !db_path.exists() {
-        return Ok(vec![]);
-    }
-
-    let conn = Connection::open(&db_path)?;
-
-    let mut stmt = conn.prepare(
-        "SELECT id, category, subcategory, text, use_count
-         FROM project_memories
-         ORDER BY use_count DESC",
+    // Check if table exists
+    let table_exists: i32 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memories'",
+        [],
+        |row| row.get(0),
     )?;
+    if table_exists == 0 {
+        return Ok(vec![]);
+    }
 
-    let memories = stmt
-        .query_map([], |row| {
-            Ok(ProjectMemory {
-                id: row.get(0)?,
-                category: row.get(1)?,
-                subcategory: row.get(2)?,
-                text: row.get(3)?,
-                use_count: row.get(4)?,
-            })
-        })?
-        .collect::<SqliteResult<Vec<_>>>()?;
+    let mut sql = String::from(
+        "SELECT id, memory_type, content, tags, use_count, created_at, updated_at FROM memories",
+    );
+    let mut conditions = Vec::new();
+
+    if memory_type.is_some() {
+        conditions.push("memory_type = ?1".to_string());
+    }
+
+    if !conditions.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&conditions.join(" AND "));
+    }
+
+    sql.push_str(" ORDER BY use_count DESC");
+
+    if let Some(lim) = limit {
+        sql.push_str(&format!(" LIMIT {}", lim));
+    }
+
+    let mut stmt = conn.prepare(&sql)?;
+
+    let row_mapper = |row: &rusqlite::Row| {
+        let tags_json: String = row.get(3)?;
+        Ok(Memory {
+            id: row.get(0)?,
+            memory_type: row.get(1)?,
+            content: row.get(2)?,
+            tags: serde_json::from_str(&tags_json).unwrap_or_default(),
+            use_count: row.get(4)?,
+            created_at: row.get(5)?,
+            updated_at: row.get(6)?,
+        })
+    };
+
+    let mut memories = Vec::new();
+    if let Some(mt) = memory_type {
+        let rows = stmt.query_map([mt], row_mapper)?;
+        for row in rows {
+            memories.push(row?);
+        }
+    } else {
+        let rows = stmt.query_map([], row_mapper)?;
+        for row in rows {
+            memories.push(row?);
+        }
+    };
+
+    // Filter by tags if specified (post-query since SQLite JSON is limited)
+    if let Some(filter_tags) = tags {
+        if !filter_tags.is_empty() {
+            memories.retain(|m| filter_tags.iter().any(|t| m.tags.contains(t)));
+        }
+    }
 
     Ok(memories)
 }
 
-/// Read project memories grouped by category.
-pub fn get_project_memories_grouped(
+/// Format memories as markdown grouped by type (for MCP response).
+pub fn format_memories_as_markdown(
     project_root: &Path,
-) -> Result<std::collections::HashMap<String, Vec<ProjectMemory>>, Error> {
-    let memories = get_project_memories(project_root)?;
+    memory_type: Option<&str>,
+    tags: Option<&[String]>,
+    limit: Option<i64>,
+) -> Result<String, Error> {
+    let memories = get_memories(project_root, memory_type, tags, limit)?;
 
-    let mut grouped: std::collections::HashMap<String, Vec<ProjectMemory>> =
-        std::collections::HashMap::new();
+    if memories.is_empty() {
+        return Ok("No memories found.".to_string());
+    }
 
-    for memory in memories {
+    // Group by type
+    let mut grouped: std::collections::BTreeMap<String, Vec<&Memory>> =
+        std::collections::BTreeMap::new();
+    for memory in &memories {
         grouped
-            .entry(memory.category.clone())
+            .entry(memory.memory_type.clone())
             .or_default()
             .push(memory);
     }
 
-    Ok(grouped)
-}
-
-/// Add a new user style.
-pub fn add_user_style(text: &str) -> Result<String, Error> {
-    let db_path = user_styles_db_path()?;
-    let conn = Connection::open(&db_path)?;
-
-    // Ensure table exists
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS user_styles (
-            id TEXT PRIMARY KEY,
-            text TEXT NOT NULL,
-            use_count INTEGER DEFAULT 0
-        )",
-        [],
-    )?;
-
-    let id = uuid::Uuid::new_v4().to_string();
-    conn.execute(
-        "INSERT INTO user_styles (id, text, use_count) VALUES (?1, ?2, 0)",
-        [&id, text],
-    )?;
-
-    Ok(id)
-}
-
-/// Delete a user style by ID.
-pub fn delete_user_style(id: &str) -> Result<bool, Error> {
-    let db_path = user_styles_db_path()?;
-    if !db_path.exists() {
-        return Ok(false);
+    let mut output = String::new();
+    for (mtype, mems) in &grouped {
+        output.push_str(&format!("## {} ({})\n", mtype, mems.len()));
+        for m in mems {
+            output.push_str(&format!("- [used {}x] {}\n", m.use_count, m.content));
+        }
+        output.push('\n');
     }
 
-    let conn = Connection::open(&db_path)?;
-    let deleted = conn.execute("DELETE FROM user_styles WHERE id = ?1", [id])?;
-
-    Ok(deleted > 0)
+    Ok(output.trim_end().to_string())
 }
 
-/// Add a new project memory.
-pub fn add_project_memory(
+/// Get memory count by type.
+pub fn get_memory_counts(
     project_root: &Path,
-    category: &str,
-    subcategory: &str,
-    text: &str,
-) -> Result<String, Error> {
-    let db_path = project_memories_db_path(project_root);
-    let conn = Connection::open(&db_path)?;
-
-    // Ensure table exists
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS project_memories (
-            id TEXT PRIMARY KEY,
-            category TEXT NOT NULL,
-            subcategory TEXT NOT NULL,
-            text TEXT NOT NULL,
-            use_count INTEGER DEFAULT 0
-        )",
-        [],
-    )?;
-
-    let id = uuid::Uuid::new_v4().to_string();
-    conn.execute(
-        "INSERT INTO project_memories (id, category, subcategory, text, use_count) VALUES (?1, ?2, ?3, ?4, 0)",
-        [&id, category, subcategory, text],
-    )?;
-
-    Ok(id)
-}
-
-/// Delete a project memory by ID.
-pub fn delete_project_memory(project_root: &Path, id: &str) -> Result<bool, Error> {
-    let db_path = project_memories_db_path(project_root);
-    if !db_path.exists() {
-        return Ok(false);
+) -> Result<std::collections::HashMap<String, i64>, Error> {
+    let path = db_path(project_root);
+    if !path.exists() {
+        return Ok(std::collections::HashMap::new());
     }
 
-    let conn = Connection::open(&db_path)?;
-    let deleted = conn.execute("DELETE FROM project_memories WHERE id = ?1", [id])?;
+    let conn = Connection::open(&path)?;
 
-    Ok(deleted > 0)
+    let table_exists: i32 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memories'",
+        [],
+        |row| row.get(0),
+    )?;
+    if table_exists == 0 {
+        return Ok(std::collections::HashMap::new());
+    }
+
+    let mut stmt =
+        conn.prepare("SELECT memory_type, COUNT(*) FROM memories GROUP BY memory_type")?;
+    let rows = stmt.query_map([], |row| {
+        let mtype: String = row.get(0)?;
+        let count: i64 = row.get(1)?;
+        Ok((mtype, count))
+    })?;
+
+    let mut counts = std::collections::HashMap::new();
+    for row in rows {
+        let (mtype, count) = row?;
+        counts.insert(mtype, count);
+    }
+
+    Ok(counts)
 }
 
-// === Doc Debt (SCHEMA-006) ===
+// === Doc Debt (SCHEMA-002) ===
 
 /// Doc debt entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -316,14 +309,12 @@ pub fn add_doc_debt(
     expected_docs: &[String],
     detection_rule: &str,
 ) -> Result<String, Error> {
-    let db_path = project_memories_db_path(project_root);
-
-    // Ensure .sqrl directory exists
-    if let Some(parent) = db_path.parent() {
-        std::fs::create_dir_all(parent)?;
+    let path = db_path(project_root);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
     }
 
-    let conn = Connection::open(&db_path)?;
+    let conn = Connection::open(&path)?;
     ensure_doc_debt_table(&conn)?;
 
     let id = uuid::Uuid::new_v4().to_string();
@@ -342,30 +333,25 @@ pub fn add_doc_debt(
 
 /// Get unresolved doc debt.
 pub fn get_unresolved_doc_debt(project_root: &Path) -> Result<Vec<DocDebt>, Error> {
-    let db_path = project_memories_db_path(project_root);
-
-    if !db_path.exists() {
+    let path = db_path(project_root);
+    if !path.exists() {
         return Ok(vec![]);
     }
 
-    let conn = Connection::open(&db_path)?;
+    let conn = Connection::open(&path)?;
 
-    // Check if table exists
     let table_exists: i32 = conn.query_row(
         "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='doc_debt'",
         [],
         |row| row.get(0),
     )?;
-
     if table_exists == 0 {
         return Ok(vec![]);
     }
 
     let mut stmt = conn.prepare(
         "SELECT id, commit_sha, commit_message, code_files, expected_docs, detection_rule, resolved, resolved_at, created_at
-         FROM doc_debt
-         WHERE resolved = 0
-         ORDER BY created_at DESC",
+         FROM doc_debt WHERE resolved = 0 ORDER BY created_at DESC",
     )?;
 
     let debts = stmt
@@ -391,41 +377,20 @@ pub fn get_unresolved_doc_debt(project_root: &Path) -> Result<Vec<DocDebt>, Erro
     Ok(debts)
 }
 
-/// Mark doc debt as resolved.
-pub fn resolve_doc_debt(project_root: &Path, id: &str) -> Result<bool, Error> {
-    let db_path = project_memories_db_path(project_root);
-    if !db_path.exists() {
-        return Ok(false);
-    }
-
-    let conn = Connection::open(&db_path)?;
-    let resolved_at = chrono::Utc::now().to_rfc3339();
-
-    let updated = conn.execute(
-        "UPDATE doc_debt SET resolved = 1, resolved_at = ?1 WHERE id = ?2",
-        [&resolved_at, id],
-    )?;
-
-    Ok(updated > 0)
-}
-
 /// Check if doc debt exists for a commit.
 pub fn has_doc_debt_for_commit(project_root: &Path, commit_sha: &str) -> Result<bool, Error> {
-    let db_path = project_memories_db_path(project_root);
-
-    if !db_path.exists() {
+    let path = db_path(project_root);
+    if !path.exists() {
         return Ok(false);
     }
 
-    let conn = Connection::open(&db_path)?;
+    let conn = Connection::open(&path)?;
 
-    // Check if table exists
     let table_exists: i32 = conn.query_row(
         "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='doc_debt'",
         [],
         |row| row.get(0),
     )?;
-
     if table_exists == 0 {
         return Ok(false);
     }
@@ -439,42 +404,50 @@ pub fn has_doc_debt_for_commit(project_root: &Path, commit_sha: &str) -> Result<
     Ok(count > 0)
 }
 
-/// Format project memories as markdown (for MCP response).
-pub fn format_memories_as_markdown(project_root: &Path) -> Result<String, Error> {
-    let grouped = get_project_memories_grouped(project_root)?;
-
-    if grouped.is_empty() {
-        return Ok("No project memories found.".to_string());
-    }
-
-    let mut output = String::new();
-
-    // Sort categories for consistent output
-    let mut categories: Vec<_> = grouped.keys().collect();
-    categories.sort();
-
-    for category in categories {
-        if let Some(memories) = grouped.get(category) {
-            output.push_str(&format!("## {}\n", category));
-            for memory in memories {
-                output.push_str(&format!("- {}\n", memory.text));
-            }
-            output.push('\n');
-        }
-    }
-
-    Ok(output.trim_end().to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
 
     #[test]
-    fn test_empty_project_memories() {
+    fn test_store_and_get_memory() {
         let dir = tempdir().unwrap();
-        let result = get_project_memories(dir.path());
+        let sqrl_dir = dir.path().join(".sqrl");
+        fs::create_dir_all(&sqrl_dir).unwrap();
+
+        let (id, deduped, count) = store_memory(
+            dir.path(),
+            "preference",
+            "No emojis",
+            &["style".to_string()],
+        )
+        .unwrap();
+        assert!(!deduped);
+        assert_eq!(count, 1);
+        assert!(!id.is_empty());
+
+        // Store same memory again - should dedup
+        let (id2, deduped2, count2) = store_memory(
+            dir.path(),
+            "preference",
+            "No emojis",
+            &["style".to_string()],
+        )
+        .unwrap();
+        assert!(deduped2);
+        assert_eq!(count2, 2);
+        assert_eq!(id, id2);
+
+        // Get memories
+        let memories = get_memories(dir.path(), None, None, None).unwrap();
+        assert_eq!(memories.len(), 1);
+        assert_eq!(memories[0].use_count, 2);
+    }
+
+    #[test]
+    fn test_get_memories_empty() {
+        let dir = tempdir().unwrap();
+        let result = get_memories(dir.path(), None, None, None);
         assert!(result.is_ok());
         assert!(result.unwrap().is_empty());
     }
@@ -482,8 +455,8 @@ mod tests {
     #[test]
     fn test_format_memories_empty() {
         let dir = tempdir().unwrap();
-        let result = format_memories_as_markdown(dir.path());
+        let result = format_memories_as_markdown(dir.path(), None, None, None);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "No project memories found.");
+        assert_eq!(result.unwrap(), "No memories found.");
     }
 }

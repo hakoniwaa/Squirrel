@@ -9,17 +9,10 @@ name = "sqrl"
 path = "src/main.rs"
 
 [dependencies]
-# Async runtime
-tokio = { version = "1", features = ["full"] }
-
-# File watching
-notify = "6"
-
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
-toml = "0.8"
 
 # Time handling
 chrono = { version = "0.4", features = ["serde"] }
@@ -31,9 +24,6 @@ uuid = { version = "1", features = ["serde", "v4"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# Path utilities
-dirs = "5"
-
 # Error handling
 thiserror = "1"
 
@@ -43,17 +33,9 @@ clap = { version = "4", features = ["derive"] }
 # SQLite
 rusqlite = { version = "0.31", features = ["bundled"] }
 
-# Pattern matching
+# Pattern matching (used by doc debt detection)
 glob = "0.3"
 regex = "1"
-
-# Web server (dashboard)
-axum = "0.7"
-tower-http = { version = "0.5", features = ["fs", "cors"] }
-
-# Platform-specific dependencies
-[target.'cfg(target_os = "linux")'.dependencies]
-libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"

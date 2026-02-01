@@ -25,24 +25,24 @@ Memories are ranked by how often they've been extracted or reinforced. Higher us
 | Reinforced | use_count++ |
 | Garbage collection | use_count = 0 AND age > threshold |
 
-### P2: AI-Primary
+### P2: CLI-Driven
 
-**The model is the decision-maker, not a form-filler.**
+**CLI AI decides what to remember. Squirrel just stores.**
 
-We don't design complex schemas for the LLM to fill. We give the model episodes and existing memories, and it decides what to extract, how to phrase it, what operations to perform.
+Squirrel has no AI. The CLI (Claude Code, Cursor, etc.) has full conversation context and decides what's worth storing. Squirrel provides MCP tools for storage and retrieval.
 
-| Our Job | Not Our Job |
-|---------|-------------|
-| Build minimal framework | Write rules for AI to follow |
-| Define schema structure | Decide what to extract |
-| Set constraints | Choose phrasing |
-| Declare objectives | Assign importance levels |
+| Squirrel's Job | CLI's Job |
+|----------------|-----------|
+| Store memories | Decide what to store |
+| Return memories | Decide when to retrieve |
+| Track doc debt | Fix doc debt |
+| Install git hooks | Follow CLAUDE.md instructions |
 
-### P3: Passive
+### P3: Invisible
 
-**Daemon watches logs, never intercepts tool calls.**
+**Zero runtime overhead during coding sessions.**
 
-100% invisible during coding sessions. No prompts, no confirmations, no interruptions. Watch logs silently, learn passively.
+No daemon, no log watching, no background processing. Squirrel only runs when called (MCP request, CLI command, git hook).
 
 ### P4: Distributed-First
 
@@ -67,10 +67,10 @@ AI tools often forget project docs exist or which docs to update. Squirrel:
 | Constraint | Rationale |
 |------------|-----------|
 | **Local-first** | All user data on their machine by default. No cloud dependency for core functionality. Privacy is non-negotiable. |
-| **Passive** | 100% invisible during coding sessions. No prompts, no confirmations, no interruptions. Watch logs silently, learn passively. |
+| **No AI in Squirrel** | Squirrel makes zero LLM calls. All intelligence comes from CLI AI. |
 | **Cross-platform** | Support Mac, Linux, Windows. No OS-specific hacks in core code. |
 | **No secrets** | Never store API keys, tokens, passwords, or credentials as memories. |
-| **No raw logs** | Don't store raw stack traces or full tool outputs. Compress and summarize. |
+| **No daemon** | No persistent background process. Only runs when called. |
 
 ---
 
@@ -78,9 +78,7 @@ AI tools often forget project docs exist or which docs to update. Squirrel:
 
 | Component | Language | Responsibility | Boundary |
 |-----------|----------|----------------|----------|
-| Rust Daemon | Rust | Log watching, storage, MCP server, CLI | Never contains LLM logic |
-| Python Memory Service | Python | Log Cleaner, Memory Extractor, Style Syncer | Never does file watching |
-| IPC | JSON-RPC 2.0 | Communication between daemon and service | Unix socket / named pipe |
+| Squirrel (`sqrl`) | Rust | MCP server, CLI, git hooks, SQLite storage | No LLM, no daemon, no network |
 
 ---
 
@@ -88,11 +86,11 @@ AI tools often forget project docs exist or which docs to update. Squirrel:
 
 | Category | Choice | Locked? |
 |----------|--------|---------|
-| Storage | SQLite + sqlite-vec | Yes (v1) |
+| Language | Rust | Yes (v1) |
+| Storage | SQLite | Yes (v1) |
 | MCP SDK | rmcp (Rust) | Yes (v1) |
-| Agent Framework | PydanticAI | Yes (v1) |
-| LLM Client | LiteLLM | Yes (v1) |
-| Default LLM | Gemini 3.0 Flash | Configurable |
+| CLI | clap | Yes (v1) |
+| Build | cargo-dist | Yes (v1) |
 
 ---
 

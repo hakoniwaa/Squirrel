@@ -488,14 +488,94 @@ let watcher = PollWatcher::new(callback, config)?;
 
 ---
 
+## ADR-021: CLI-Driven Memory Architecture
+
+**Status:** accepted
+**Date:** 2025-02-01
+
+**Context:**
+The original architecture had a Rust daemon watching log files and a Python Memory Service running Gemini to extract memories. Problems:
+- Daemon-extracted memories were often wrong (low accuracy)
+- Python service added complexity (IPC, deployment, LLM costs)
+- History processing was slow and error-prone
+- The CLI AI already has full conversation context and better judgment
+
+Reference systems (Letta/MemGPT, memory-graph) both use the CLI/agent itself to decide what to store, not an external daemon.
+
+**Decision:**
+Remove all AI from Squirrel. CLI AI decides what to remember and calls MCP tools directly.
+
+| Removed | Replacement |
+|---------|-------------|
+| Python Memory Service | CLI AI stores via MCP |
+| Daemon log watching | Not needed |
+| History processing in init | Not needed |
+| Gemini LLM calls | CLI AI handles decisions |
+| IPC (Unix socket) | Not needed (single binary) |
+| systemd/launchd service | Not needed (no daemon) |
+| sqlite-vec embeddings | Not needed |
+| Dashboard | Deferred to v2 |
+
+New architecture:
+- Single Rust binary (`sqrl`)
+- 2 MCP tools: `store_memory`, `get_memory`
+- Git hooks for doc debt
+- Skill file for session start preferences
+- CLAUDE.md triggers for memory storage
+
+**Consequences:**
+- (+) Much simpler (single binary, no Python, no daemon)
+- (+) Higher accuracy (CLI AI has full context)
+- (+) Zero LLM cost for Squirrel
+- (+) No deployment complexity
+- (+) Faster init (no history processing)
+- (-) Depends on CLI AI following CLAUDE.md instructions
+- (-) No memory extraction from non-MCP-aware tools
+- (-) Dedup is basic (exact match only, no semantic)
+
+**Supersedes:**
+- ADR-001: Rust + Python Split (now single Rust binary)
+- ADR-003: PydanticAI (no Python service)
+- ADR-004: 2-Tier Model Pipeline (no LLM in Squirrel)
+- ADR-009: Unix Socket IPC (no IPC needed)
+- ADR-012: Simplified Memory Architecture (further simplified)
+- ADR-016: System Service (no daemon)
+- ADR-020: Poll-Based Watching (no file watching)
+
+---
+
 ## Deprecated ADRs
 
 | ADR | Status | Reason |
 |-----|--------|--------|
+| ADR-001 | superseded | Single binary, no Python split (ADR-021) |
+| ADR-003 | superseded | No Python service (ADR-021) |
+| ADR-004 | superseded | No LLM in Squirrel (ADR-021) |
 | ADR-005 | superseded | Declarative keys removed in ADR-012 |
 | ADR-008 | superseded | Frustration detection removed in ADR-012 |
+| ADR-009 | superseded | No IPC needed (ADR-021) |
 | ADR-010 | superseded | Replaced by simpler ADR-012 |
 | ADR-011 | superseded | No longer needed without CR-Memory |
+| ADR-012 | superseded | Further simplified by ADR-021 |
+| ADR-016 | superseded | No daemon needed (ADR-021) |
+| ADR-020 | superseded | No file watching (ADR-021) |
+
+---
+
+## Active ADRs
+
+| ADR | Summary |
+|-----|---------|
+| ADR-002 | SQLite storage (still used, without sqlite-vec) |
+| ADR-006 | Nix/devenv for development |
+| ADR-007 | Spec-driven development |
+| ADR-013 | B2B focus with B2D open source |
+| ADR-014 | Minimal CLI commands |
+| ADR-015 | Category-based organization (now tag-based, spirit preserved) |
+| ADR-017 | Doc awareness (git hooks, doc debt) |
+| ADR-018 | Silent init |
+| ADR-019 | Auto git hook installation |
+| ADR-021 | CLI-driven memory architecture |
 
 ---
 
@@ -504,5 +584,5 @@ let watcher = PollWatcher::new(callback, config)?;
 | Topic | Options | Blocking |
 |-------|---------|----------|
 | Team sync backend | Supabase / Custom / None | v2 |
-| Local LLM support | Ollama / llama.cpp / None | v2 |
-| Dashboard hosting | Local / Cloud / Hybrid | v1 |
+| Dashboard hosting | Local / Cloud / Hybrid | v2 |
+| Memory dedup strategy | Exact match / Semantic / AI | Cloud version |

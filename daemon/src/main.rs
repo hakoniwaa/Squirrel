@@ -1,16 +1,15 @@
-//! Squirrel daemon - local-first memory system for AI coding tools.
+//! Squirrel - local-first memory system for AI coding tools.
+//!
+//! Single binary. No daemon. No AI. Just storage + git hooks.
 
 use clap::{Parser, Subcommand};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 mod cli;
 mod config;
-mod dashboard;
 mod error;
-mod ipc;
 mod mcp;
 mod storage;
-mod watcher;
 
 pub use error::Error;
 
@@ -26,17 +25,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Initialize Squirrel for this project
-    Init {
-        /// Skip processing historical logs
-        #[arg(long)]
-        no_history: bool,
-    },
-
-    /// Enable the watcher daemon
-    On,
-
-    /// Disable the watcher daemon
-    Off,
+    Init,
 
     /// Remove all Squirrel data from this project
     Goaway {
@@ -45,19 +34,12 @@ enum Commands {
         force: bool,
     },
 
-    /// Open configuration in browser
-    Config,
-
     /// Show Squirrel status
     Status,
 
-    /// Internal: run the watcher daemon (used by system service)
-    #[command(hide = true)]
-    WatchDaemon,
-
-    /// Internal: run MCP server (used by AI tools)
-    #[command(hide = true)]
-    Mcp,
+    /// Start MCP server (called by AI tool config, not user)
+    #[command(name = "mcp-serve")]
+    McpServe,
 
     /// Internal commands (used by git hooks)
     #[command(hide = true, name = "_internal")]
@@ -78,8 +60,7 @@ enum InternalCommands {
     DocguardCheck,
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Error> {
+fn main() -> Result<(), Error> {
     // Initialize logging
     tracing_subscriber::registry()
         .with(fmt::layer())
@@ -90,25 +71,15 @@ async fn main() -> Result<(), Error> {
 
     match cli.command {
         None => {
-            // Show help when no command provided
             use clap::CommandFactory;
             Cli::command().print_help().unwrap();
             println!();
         }
-        Some(Commands::Init { no_history }) => {
-            cli::init::run(!no_history).await?;
-        }
-        Some(Commands::On) => {
-            cli::daemon::enable().await?;
-        }
-        Some(Commands::Off) => {
-            cli::daemon::disable().await?;
+        Some(Commands::Init) => {
+            cli::init::run()?;
         }
         Some(Commands::Goaway { force }) => {
-            cli::goaway::run(force).await?;
-        }
-        Some(Commands::Config) => {
-            cli::config::open()?;
+            cli::goaway::run(force)?;
         }
         Some(Commands::Status) => {
             let exit_code = cli::status::run()?;
@@ -116,10 +87,7 @@ async fn main() -> Result<(), Error> {
                 std::process::exit(exit_code);
             }
         }
-        Some(Commands::WatchDaemon) => {
-            cli::watch::run_daemon().await?;
-        }
-        Some(Commands::Mcp) => {
+        Some(Commands::McpServe) => {
             mcp::run()?;
         }
         Some(Commands::Internal { cmd }) => match cmd {

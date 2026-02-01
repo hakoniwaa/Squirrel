@@ -1,8 +1,7 @@
-//! MCP (Model Context Protocol) server for AI tools.
+//! MCP server for AI tools.
 //!
-//! Implements MCP-001: squirrel_get_memory tool.
-//! Implements MCP-002: squirrel_get_docs_tree tool.
-//! Implements MCP-003: squirrel_get_doc_debt tool.
+//! MCP-001: squirrel_store_memory
+//! MCP-002: squirrel_get_memory
 
 use std::io::{BufRead, Write};
 use std::path::Path;
@@ -14,14 +13,10 @@ use tracing::{debug, error, info};
 use crate::error::Error;
 use crate::storage;
 
-/// MCP protocol version.
 const PROTOCOL_VERSION: &str = "2024-11-05";
-
-/// Server info.
 const SERVER_NAME: &str = "squirrel";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// JSON-RPC request.
 #[derive(Debug, Deserialize)]
 struct JsonRpcRequest {
     #[allow(dead_code)]
@@ -32,7 +27,6 @@ struct JsonRpcRequest {
     id: Option<Value>,
 }
 
-/// JSON-RPC response.
 #[derive(Debug, Serialize)]
 struct JsonRpcResponse {
     jsonrpc: String,
@@ -43,7 +37,6 @@ struct JsonRpcResponse {
     id: Value,
 }
 
-/// JSON-RPC error.
 #[derive(Debug, Serialize)]
 struct JsonRpcError {
     code: i32,
@@ -70,235 +63,146 @@ impl JsonRpcResponse {
     }
 }
 
-/// Tool definition for MCP.
+/// MCP tool definitions.
 fn get_tools() -> Value {
     json!({
         "tools": [
             {
+                "name": "squirrel_store_memory",
+                "description": "Store a memory in Squirrel. Use when user states a preference, you learn a project fact, make a decision, or solve a problem.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "content": {
+                            "type": "string",
+                            "description": "The memory content (1-2 sentences)"
+                        },
+                        "memory_type": {
+                            "type": "string",
+                            "enum": ["preference", "project", "decision", "solution"],
+                            "description": "Type of memory"
+                        },
+                        "tags": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Tags for organization"
+                        }
+                    },
+                    "required": ["content", "memory_type"]
+                }
+            },
+            {
                 "name": "squirrel_get_memory",
-                "description": "Get project memories from Squirrel. Call when user asks to 'use Squirrel' or wants project context.",
+                "description": "Get memories from Squirrel. Call when you need project context, user preferences, or past decisions.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "project_root": {
+                        "memory_type": {
                             "type": "string",
-                            "description": "Absolute path to project root"
+                            "enum": ["preference", "project", "decision", "solution"],
+                            "description": "Filter by type. Omit to get all."
+                        },
+                        "tags": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Filter by tags. Omit to get all."
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Max memories to return. Default 50."
                         }
                     },
-                    "required": ["project_root"]
-                }
-            },
-            {
-                "name": "squirrel_get_doc_debt",
-                "description": "Get documentation debt for a project. Shows commits that changed code without updating expected docs.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "project_root": {
-                            "type": "string",
-                            "description": "Absolute path to project root"
-                        }
-                    },
-                    "required": ["project_root"]
-                }
-            },
-            {
-                "name": "squirrel_get_docs_tree",
-                "description": "Get project documentation structure. Use when starting work on a project to understand its documentation layout.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "project_root": {
-                            "type": "string",
-                            "description": "Absolute path to project root"
-                        }
-                    },
-                    "required": ["project_root"]
+                    "required": []
                 }
             }
         ]
     })
 }
 
-/// Handle squirrel_get_memory tool call.
+/// Get project root from MCP params, falling back to cwd.
+fn get_project_root(params: &Value) -> Result<std::path::PathBuf, Error> {
+    // Try to get from arguments
+    if let Some(root) = params
+        .get("arguments")
+        .and_then(|a| a.get("project_root"))
+        .and_then(|p| p.as_str())
+    {
+        let path = Path::new(root);
+        if path.exists() {
+            return Ok(path.to_path_buf());
+        }
+    }
+
+    // Fall back to current working directory
+    std::env::current_dir().map_err(Error::Io)
+}
+
+/// Handle squirrel_store_memory.
+fn handle_store_memory(params: &Value) -> Result<Value, Error> {
+    let args = params.get("arguments").unwrap_or(params);
+
+    let content = args
+        .get("content")
+        .and_then(|c| c.as_str())
+        .ok_or_else(|| Error::Mcp("Missing 'content' parameter".to_string()))?;
+
+    let memory_type = args
+        .get("memory_type")
+        .and_then(|t| t.as_str())
+        .ok_or_else(|| Error::Mcp("Missing 'memory_type' parameter".to_string()))?;
+
+    let tags: Vec<String> = args
+        .get("tags")
+        .and_then(|t| t.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let project_root = get_project_root(params)?;
+    let (_id, deduplicated, use_count) =
+        storage::store_memory(&project_root, memory_type, content, &tags)?;
+
+    let msg = if deduplicated {
+        format!("Memory reinforced (use_count: {}): {}", use_count, content)
+    } else {
+        format!("Memory stored: {}", content)
+    };
+
+    Ok(json!({
+        "content": [{
+            "type": "text",
+            "text": msg
+        }]
+    }))
+}
+
+/// Handle squirrel_get_memory.
 fn handle_get_memory(params: &Value) -> Result<Value, Error> {
-    let project_root = params
-        .get("arguments")
-        .and_then(|a| a.get("project_root"))
-        .and_then(|p| p.as_str())
-        .ok_or_else(|| Error::Ipc("Missing project_root parameter".to_string()))?;
+    let args = params.get("arguments").unwrap_or(params);
 
-    let path = Path::new(project_root);
-    if !path.exists() {
-        return Err(Error::Ipc(format!(
-            "Project root does not exist: {}",
-            project_root
-        )));
-    }
+    let memory_type = args.get("memory_type").and_then(|t| t.as_str());
 
-    let markdown = storage::format_memories_as_markdown(path)?;
+    let tags: Option<Vec<String>> = args.get("tags").and_then(|t| t.as_array()).map(|arr| {
+        arr.iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect()
+    });
 
-    Ok(json!({
-        "content": [
-            {
-                "type": "text",
-                "text": markdown
-            }
-        ]
-    }))
-}
+    let limit = args.get("limit").and_then(|l| l.as_i64());
 
-/// Handle squirrel_get_doc_debt tool call.
-fn handle_get_doc_debt(params: &Value) -> Result<Value, Error> {
-    let project_root = params
-        .get("arguments")
-        .and_then(|a| a.get("project_root"))
-        .and_then(|p| p.as_str())
-        .ok_or_else(|| Error::Ipc("Missing project_root parameter".to_string()))?;
-
-    let path = Path::new(project_root);
-    if !path.exists() {
-        return Err(Error::Ipc(format!(
-            "Project root does not exist: {}",
-            project_root
-        )));
-    }
-
-    let debts = storage::get_unresolved_doc_debt(path)?;
-
-    if debts.is_empty() {
-        return Ok(json!({
-            "content": [
-                {
-                    "type": "text",
-                    "text": "No documentation debt found. All docs are up to date!"
-                }
-            ]
-        }));
-    }
-
-    // Format as markdown
-    let mut markdown = format!(
-        "# Documentation Debt\n\n{} commit(s) have unupdated docs:\n\n",
-        debts.len()
-    );
-
-    for debt in &debts {
-        let short_sha = &debt.commit_sha[..7.min(debt.commit_sha.len())];
-        let msg = debt.commit_message.as_deref().unwrap_or("(no message)");
-        markdown.push_str(&format!("## `{}` {}\n\n", short_sha, msg));
-        markdown.push_str("**Changed code:**\n");
-        for file in &debt.code_files {
-            markdown.push_str(&format!("- {}\n", file));
-        }
-        markdown.push_str("\n**Expected doc updates:**\n");
-        for doc in &debt.expected_docs {
-            markdown.push_str(&format!("- {}\n", doc));
-        }
-        markdown.push_str(&format!("\n*Detection rule: {}*\n\n", debt.detection_rule));
-    }
+    let project_root = get_project_root(params)?;
+    let markdown =
+        storage::format_memories_as_markdown(&project_root, memory_type, tags.as_deref(), limit)?;
 
     Ok(json!({
-        "content": [
-            {
-                "type": "text",
-                "text": markdown
-            }
-        ]
+        "content": [{
+            "type": "text",
+            "text": markdown
+        }]
     }))
-}
-
-/// Handle squirrel_get_docs_tree tool call.
-fn handle_get_docs_tree(params: &Value) -> Result<Value, Error> {
-    let project_root = params
-        .get("arguments")
-        .and_then(|a| a.get("project_root"))
-        .and_then(|p| p.as_str())
-        .ok_or_else(|| Error::Ipc("Missing project_root parameter".to_string()))?;
-
-    let path = Path::new(project_root);
-    if !path.exists() {
-        return Err(Error::Ipc(format!(
-            "Project root does not exist: {}",
-            project_root
-        )));
-    }
-
-    let markdown = scan_docs_tree(path);
-
-    Ok(json!({
-        "content": [
-            {
-                "type": "text",
-                "text": markdown
-            }
-        ]
-    }))
-}
-
-/// Scan project for documentation files and build a tree.
-fn scan_docs_tree(project_root: &Path) -> String {
-    use std::collections::BTreeMap;
-    use std::fs;
-
-    let mut tree: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let doc_extensions = ["md", "mdx", "txt", "rst"];
-
-    // Known documentation directories
-    let doc_dirs = ["docs", "doc", "specs", ".claude", ".cursor"];
-
-    // Scan known doc directories
-    for dir_name in &doc_dirs {
-        let dir_path = project_root.join(dir_name);
-        if dir_path.exists() && dir_path.is_dir() {
-            if let Ok(entries) = fs::read_dir(&dir_path) {
-                let files: Vec<String> = entries
-                    .flatten()
-                    .filter(|e| {
-                        let path = e.path();
-                        path.is_file()
-                            && path
-                                .extension()
-                                .map(|ext| doc_extensions.contains(&ext.to_string_lossy().as_ref()))
-                                .unwrap_or(false)
-                    })
-                    .map(|e| e.file_name().to_string_lossy().to_string())
-                    .collect();
-
-                if !files.is_empty() {
-                    tree.insert(format!("{}/", dir_name), files);
-                }
-            }
-        }
-    }
-
-    // Check root for common doc files
-    let root_docs: Vec<String> = ["README.md", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE.md"]
-        .iter()
-        .filter(|name| project_root.join(name).exists())
-        .map(|s| s.to_string())
-        .collect();
-
-    if !root_docs.is_empty() {
-        tree.insert("(root)".to_string(), root_docs);
-    }
-
-    // Format as markdown
-    if tree.is_empty() {
-        return "No documentation files found.".to_string();
-    }
-
-    let mut output = String::from("# Documentation Structure\n\n");
-
-    for (dir, files) in &tree {
-        output.push_str(&format!("## {}\n", dir));
-        for file in files {
-            output.push_str(&format!("- {}\n", file));
-        }
-        output.push('\n');
-    }
-
-    output.trim_end().to_string()
 }
 
 /// Handle incoming MCP request.
@@ -325,7 +229,6 @@ fn handle_request(request: &JsonRpcRequest) -> JsonRpcResponse {
 
         "notifications/initialized" => {
             debug!("MCP initialized notification");
-            // Notification, no response needed but we return empty for consistency
             JsonRpcResponse::success(id, json!({}))
         }
 
@@ -344,15 +247,11 @@ fn handle_request(request: &JsonRpcRequest) -> JsonRpcResponse {
             debug!(tool = tool_name, "MCP tools/call");
 
             match tool_name {
+                "squirrel_store_memory" => match handle_store_memory(&request.params) {
+                    Ok(result) => JsonRpcResponse::success(id, result),
+                    Err(e) => JsonRpcResponse::error(id, -32000, e.to_string()),
+                },
                 "squirrel_get_memory" => match handle_get_memory(&request.params) {
-                    Ok(result) => JsonRpcResponse::success(id, result),
-                    Err(e) => JsonRpcResponse::error(id, -32000, e.to_string()),
-                },
-                "squirrel_get_doc_debt" => match handle_get_doc_debt(&request.params) {
-                    Ok(result) => JsonRpcResponse::success(id, result),
-                    Err(e) => JsonRpcResponse::error(id, -32000, e.to_string()),
-                },
-                "squirrel_get_docs_tree" => match handle_get_docs_tree(&request.params) {
                     Ok(result) => JsonRpcResponse::success(id, result),
                     Err(e) => JsonRpcResponse::error(id, -32000, e.to_string()),
                 },

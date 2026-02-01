@@ -1,65 +1,47 @@
-//! Show Squirrel status for current project.
+//! Show Squirrel status.
 
 use std::path::Path;
 
-use crate::cli::service;
 use crate::error::Error;
 use crate::storage;
 
-/// Exit codes for status command.
-pub mod exit_code {
-    pub const OK: i32 = 0;
-    pub const NOT_INITIALIZED: i32 = 1;
-    pub const DAEMON_NOT_RUNNING: i32 = 2;
-}
-
-/// Run the status command.
+/// Run the status command. Returns exit code.
 pub fn run() -> Result<i32, Error> {
     let project_root = std::env::current_dir()?;
     let sqrl_dir = project_root.join(".sqrl");
 
     println!("Squirrel Status");
-
-    // Project path
     println!("  Project: {}", project_root.display());
 
-    // Check if initialized
-    let initialized = sqrl_dir.exists();
-    println!("  Initialized: {}", if initialized { "yes" } else { "no" });
-
-    if !initialized {
+    if !sqrl_dir.exists() {
+        println!("  Initialized: no");
         println!();
         println!("Run 'sqrl init' to initialize Squirrel for this project.");
-        return Ok(exit_code::NOT_INITIALIZED);
+        return Ok(1);
     }
 
-    // Check daemon status
-    let daemon_running = service::is_running().unwrap_or(false);
-    println!(
-        "  Daemon: {}",
-        if daemon_running { "running" } else { "stopped" }
-    );
+    println!("  Initialized: yes");
 
-    // Get memory counts
-    let (project_count, user_count) = get_memory_counts(&project_root);
-    println!(
-        "  Memories: {} project, {} user styles",
-        project_count, user_count
-    );
+    // Memory counts
+    let counts = storage::get_memory_counts(&project_root)?;
+    let total: i64 = counts.values().sum();
+    if total > 0 {
+        let mut parts: Vec<String> = counts.iter().map(|(k, v)| format!("{} {}", v, k)).collect();
+        parts.sort();
+        println!("  Memories: {} total ({})", total, parts.join(", "));
+    } else {
+        println!("  Memories: 0");
+    }
 
-    // Doc debt status
+    // Doc debt
     let debts = storage::get_unresolved_doc_debt(&project_root).unwrap_or_default();
     if debts.is_empty() {
         println!("  Doc debt: none");
     } else {
-        println!(
-            "  Doc debt: {} commit{}",
-            debts.len(),
-            if debts.len() == 1 { "" } else { "s" }
-        );
+        println!("  Doc debt: {} pending", debts.len());
     }
 
-    // Last activity (from config file modification time)
+    // Last activity
     if let Some(last_activity) = get_last_activity(&sqrl_dir) {
         println!("  Last activity: {}", last_activity);
     }
@@ -76,24 +58,7 @@ pub fn run() -> Result<i32, Error> {
         }
     }
 
-    if !daemon_running {
-        println!();
-        println!("Run 'sqrl on' to start the daemon.");
-        return Ok(exit_code::DAEMON_NOT_RUNNING);
-    }
-
-    Ok(exit_code::OK)
-}
-
-/// Get memory counts from storage.
-fn get_memory_counts(project_root: &Path) -> (usize, usize) {
-    let project_count = storage::get_project_memories(project_root)
-        .map(|m| m.len())
-        .unwrap_or(0);
-
-    let user_count = storage::get_user_styles().map(|s| s.len()).unwrap_or(0);
-
-    (project_count, user_count)
+    Ok(0)
 }
 
 /// Get last activity time as human-readable string.

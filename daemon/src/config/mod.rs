@@ -98,10 +98,9 @@ pub struct HooksConfig {
     pub pre_push_block: bool,
 }
 
-/// Internal state (managed by daemon, not user).
+/// Internal state (managed by sqrl, not user).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InternalConfig {
-    pub watcher_enabled: bool,
     pub initialized_at: String,
 }
 
@@ -175,7 +174,6 @@ impl Default for Config {
             doc_rules: DocRulesConfig::default(),
             hooks: HooksConfig::default(),
             internal: Some(InternalConfig {
-                watcher_enabled: true,
                 initialized_at: chrono::Utc::now().to_rfc3339(),
             }),
         }
@@ -214,26 +212,6 @@ impl Config {
         fs::write(&config_path, with_header)?;
         Ok(())
     }
-
-    /// Check if watcher is enabled.
-    pub fn is_watcher_enabled(&self) -> bool {
-        self.internal
-            .as_ref()
-            .map(|i| i.watcher_enabled)
-            .unwrap_or(true)
-    }
-
-    /// Set watcher enabled state.
-    pub fn set_watcher_enabled(&mut self, enabled: bool) {
-        if let Some(ref mut internal) = self.internal {
-            internal.watcher_enabled = enabled;
-        } else {
-            self.internal = Some(InternalConfig {
-                watcher_enabled: enabled,
-                initialized_at: chrono::Utc::now().to_rfc3339(),
-            });
-        }
-    }
 }
 
 #[cfg(test)]
@@ -261,6 +239,6 @@ mod tests {
 
         let loaded = Config::load(dir.path()).unwrap();
         assert!(loaded.tools.claude_code);
-        assert!(loaded.is_watcher_enabled());
+        assert!(loaded.internal.is_some());
     }
 }

@@ -41,6 +41,7 @@ pub fn has_git(project_root: &Path) -> bool {
 }
 
 /// Check if Squirrel hooks are already installed.
+#[allow(dead_code)]
 pub fn hooks_installed(project_root: &Path) -> bool {
     let hooks_dir = project_root.join(".git").join("hooks");
     let post_commit = hooks_dir.join("post-commit");

@@ -6,11 +6,11 @@ High-level system boundaries and data flow.
 
 | Principle | Description |
 |-----------|-------------|
-| **Passive** | Daemon watches logs, never intercepts tool calls |
-| **Distributed-first** | All extraction happens locally, no central server required |
-| **LLM Autonomy** | LLM decides what to extract, not hardcoded rules |
-| **Simple** | No complex evaluation loops, just use_count based ordering |
-| **Doc Aware** | Daemon tracks project docs, exposes structure to AI tools |
+| **CLI-Driven** | CLI AI decides what to remember, Squirrel just stores |
+| **Local-First** | All data stored locally, no cloud required |
+| **No AI in Squirrel** | Squirrel has zero LLM calls; all intelligence from CLI |
+| **Minimal** | 2 MCP tools, git hooks, SQLite. Nothing more. |
+| **Doc Aware** | Git hooks track doc debt, CLI fixes docs |
 
 ## System Overview
 
@@ -23,325 +23,189 @@ High-level system boundaries and data flow.
 │  │ Claude Code  │    │    Cursor    │    │  Codex CLI   │       │
 │  └──────┬───────┘    └──────┬───────┘    └──────┬───────┘       │
 │         │                   │                   │                │
+│         │  CLAUDE.md tells CLI when to store     │                │
+│         │  Skill shows preferences at start      │                │
+│         │                   │                   │                │
 │         └─────────┬─────────┴─────────┬─────────┘                │
-│                   │                   │                          │
+│                   │ MCP               │ MCP                      │
 │                   ▼                   ▼                          │
-│         ┌─────────────────┐  ┌─────────────────┐                 │
-│         │   Log Files     │  │   MCP Client    │                 │
-│         │ (watched)       │  │   (queries)     │                 │
-│         └────────┬────────┘  └────────┬────────┘                 │
-│                  │                    │                          │
-│                  ▼                    ▼                          │
 │  ┌───────────────────────────────────────────────────────────┐  │
-│  │                    RUST DAEMON                             │  │
+│  │                    SQUIRREL (sqrl binary)                  │  │
+│  │                                                            │  │
 │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │  │
-│  │  │ Log Watcher │  │ Doc Watcher │  │ Git Watcher │        │  │
-│  │  │   (notify)  │  │   (notify)  │  │   (notify)  │        │  │
-│  │  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘        │  │
-│  │         │                │                │               │  │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │  │
-│  │  │ MCP Server  │  │ CLI Handler │  │  Dashboard  │        │  │
-│  │  │   (rmcp)    │  │   (clap)    │  │   (axum)    │        │  │
+│  │  │ MCP Server  │  │ CLI Handler │  │ Git Hooks   │        │  │
+│  │  │ (rmcp)      │  │ (clap)      │  │ (docguard)  │        │  │
 │  │  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘        │  │
 │  │         │                │                │               │  │
 │  │         └────────────────┼────────────────┘               │  │
 │  │                          ▼                                │  │
 │  │                 ┌─────────────────┐                       │  │
 │  │                 │     SQLite      │                       │  │
-│  │                 │  + sqlite-vec   │                       │  │
+│  │                 │ (.sqrl/memory.db)│                       │  │
 │  │                 └─────────────────┘                       │  │
 │  └───────────────────────────────────────────────────────────┘  │
-│                              │                                   │
-│                              │ Unix Socket (JSON-RPC 2.0)        │
-│                              ▼                                   │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │               PYTHON MEMORY SERVICE                        │  │
-│  │  ┌─────────────────────────────────────────────────────┐  │  │
-│  │  │                  User Scanner                        │  │  │
-│  │  │  - Cheap model (Gemini Flash)                       │  │  │
-│  │  │  - Identifies behavioral patterns                    │  │  │
-│  │  └─────────────────────────────────────────────────────┘  │  │
-│  │  ┌─────────────────────────────────────────────────────┐  │  │
-│  │  │                  Memory Extractor                    │  │  │
-│  │  │  - Strong model (Gemini Pro)                        │  │  │
-│  │  │  - Extracts user style + project memory             │  │  │
-│  │  └─────────────────────────────────────────────────────┘  │  │
-│  │  ┌─────────────────────────────────────────────────────┐  │  │
-│  │  │                  Doc Summarizer                      │  │  │
-│  │  │  - Cheap model (Gemini Flash)                       │  │  │
-│  │  │  - Summarizes doc content for tree display          │  │  │
-│  │  └─────────────────────────────────────────────────────┘  │  │
-│  └───────────────────────────────────────────────────────────┘  │
-│                              │                                   │
-└──────────────────────────────┼───────────────────────────────────┘
-                               │ HTTPS
-                               ▼
-                    ┌─────────────────────┐
-                    │    LLM Providers    │
-                    │  (Google/Anthropic) │
-                    └─────────────────────┘
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ## Component Boundaries
 
-### ARCH-001: Rust Daemon
+### ARCH-001: Squirrel Binary
 
-**Responsibility:** Local I/O, storage, MCP server, CLI, doc awareness.
+Single Rust binary. No persistent daemon. Started on-demand by CLI tools (MCP) or git hooks.
 
 | Module | Purpose |
 |--------|---------|
-| Log Watcher | File system events for AI tool logs (notify PollWatcher, ADR-020) |
-| Doc Watcher | File system events for project docs (notify PollWatcher) |
-| Git Watcher | Detects `.git/` creation, auto-installs hooks |
-| MCP Server | Serves memories + doc tree to AI tools (rmcp) |
-| CLI Handler | `sqrl init`, `sqrl on/off`, `sqrl goaway`, `sqrl config`, `sqrl status` (clap) |
-| SQLite Storage | User style + project memory + doc index storage |
-| Service Manager | System service (systemd/launchd/Task Scheduler) |
-| Dashboard | Web UI for configuration (axum) |
+| MCP Server | Serves `store_memory` + `get_memory` to CLI tools (rmcp) |
+| CLI Handler | `sqrl init`, `sqrl goaway`, `sqrl status` (clap) |
+| Git Hooks | Doc debt detection (post-commit, pre-push) |
+| SQLite Storage | Memories + doc debt storage |
 
 **Owns:**
 - SQLite read/write
-- sqlite-vec vector queries
 - use_count tracking
 - MCP protocol handling
-- Doc index storage
 - Doc debt tracking
 - Git hook installation
 
 **Never Contains:**
 - LLM API calls
-- Tool interception
+- Log file watching
+- History processing
+- IPC to other services
 
 ---
 
-### ARCH-002: Python Memory Service
+### ARCH-002: CLI Integration
 
-**Responsibility:** All LLM operations.
+CLI tools (Claude Code, Cursor, etc.) are the intelligence layer.
 
-| Module | Purpose | Model |
-|--------|---------|-------|
-| User Scanner | Identify messages with behavioral patterns | gemini-3.0-flash |
-| Memory Extractor | Extract behavioral adjustments | gemini-3.0-pro |
-| Doc Summarizer | Summarize doc content for tree display | gemini-3.0-flash |
-| Style Syncer | Write user style to agent.md | N/A |
+| Integration | Mechanism | Purpose |
+|-------------|-----------|---------|
+| **CLAUDE.md** | Instructions in project/user config | Tells CLI when to store memories |
+| **Skill** | `.claude/skills/squirrel-session/SKILL.md` | Shows user preferences at session start |
+| **MCP** | `squirrel_store_memory`, `squirrel_get_memory` | Store and retrieve memories |
 
-**Owns:**
-- All LLM API calls
-- Session-end extraction pipeline
-- Memory extraction logic
-- Doc summarization
-- agent.md file writes
+**CLI is responsible for:**
+- Deciding what to remember
+- Deciding when to store
+- Updating docs when debt is reported
+- Reviewing/applying user preferences
 
-**Never Contains:**
-- File watching
-- Direct database access (via IPC only)
-- MCP protocol
-- Embedding generation (v1 uses use_count ordering, no semantic search)
+**Squirrel is NOT responsible for:**
+- Memory extraction from conversations
+- Deciding what's important
+- Fixing documentation
+- Any LLM operations
 
 ---
 
 ### ARCH-003: Storage Layer
 
-| Database | Location | Contains |
-|----------|----------|----------|
-| User Style DB | `~/.sqrl/user_style.db` | Personal development style |
-| Project Memory DB | `<repo>/.sqrl/memory.db` | Project-specific memories |
-| Project Config | `<repo>/.sqrl/config.yaml` | Tool settings, doc patterns |
-| Docs Index | `<repo>/.sqrl/memory.db` | Doc tree with summaries (same DB) |
-| Doc Debt | `<repo>/.sqrl/memory.db` | Tracked doc debt per commit (same DB) |
+| File | Location | Contains |
+|------|----------|----------|
+| Project Memory DB | `<repo>/.sqrl/memory.db` | All memories + doc debt |
+| Project Config | `<repo>/.sqrl/config.yaml` | Doc patterns, hook settings |
+| Skill File | `<repo>/.claude/skills/squirrel-session/SKILL.md` | Session start instructions |
 
 ---
 
-## Memory Types
+## Memory Model
 
-### User Style (Personal)
+### How Memories Are Created
 
-Extracted from coding sessions, synced to agent.md files.
+```
+CLI AI decides "this is worth remembering"
+    → CLI calls MCP: squirrel_store_memory
+    → Squirrel stores to SQLite
+    → Done
+```
 
-| Example |
-|---------|
-| "Commits should use minimal English" |
-| "AI should maintain critical, calm attitude" |
-| "Never use emoji in code or comments" |
-| "Prefer async/await over callbacks" |
+No extraction pipeline. No scanning. No filtering. CLI AI has full conversation context and makes the decision.
 
-**Storage:** Database + synced to `~/.sqrl/personal-style.md` and agent config files.
+### How Memories Are Retrieved
 
-**Team (B2B):** Team admin can promote personal styles to team-level via Dashboard.
+```
+CLI needs project context (user asks, or session start skill)
+    → CLI calls MCP: squirrel_get_memory
+    → Squirrel returns memories ordered by use_count
+    → CLI uses them in context
+```
 
----
+### Memory Types
 
-### Project Memory
-
-Project-specific knowledge, organized by category.
-
-| Category | Description |
-|----------|-------------|
-| `frontend` | Frontend architecture, components, styling |
-| `backend` | Backend architecture, APIs, database |
-| `docs_test` | Documentation, testing conventions |
-| `other` | Everything else |
-
-**Subcategories:** Default is `main`. Users can add custom subcategories via Dashboard.
-
-**Storage:** `<repo>/.sqrl/memory.db`
-
-**Access:** Via MCP tool, returns all categories grouped.
+| Type | Description | Examples |
+|------|-------------|---------|
+| `preference` | User's coding style preferences | "No emojis", "Use Gemini 3 Pro" |
+| `project` | Project-specific knowledge | "Use httpx not requests" |
+| `decision` | Architecture decisions | "Chose PostgreSQL for transactions" |
+| `solution` | Problem-solution pairs | "Fixed SSL by switching to httpx" |
 
 ---
 
 ## Data Flow
 
-### FLOW-001: Memory Extraction (Input)
-
-**Timing:** Session-end processing (not per-message)
+### FLOW-001: Memory Storage (CLI → Squirrel)
 
 ```
-1. User codes with AI CLI
-2. CLI writes to log file
-3. Daemon detects file change (notify)
-4. Daemon buffers events until session boundary:
-   - Time gap (>10 min idle)
-5. Daemon sends session data to Memory Service
-6. User Scanner (Flash model):
-   - Scans user messages only (cheap)
-   - Identifies messages with behavioral patterns
-   - Returns indices of flagged messages
-   - If no patterns found, skip to step 9
-7. Memory Extractor (Pro model):
-   - Only processes flagged messages + AI context
-   - Asks: "What should AI do differently?"
-   - Extracts memories with confidence scores
-   - Only memories with confidence > 0.8 proceed
-   - Compares with existing memories:
-     - Duplicate: increment use_count
-     - Similar: merge/update
-     - New: add
-8. Style Syncer:
-   - Updates user style in database
-   - Syncs to agent.md files
-9. Daemon stores project memories in SQLite
-```
-
-**Key Design Decisions:**
-- Two-stage pipeline keeps costs low (Flash filters, Pro only sees relevant slices)
-- Session-end processing provides full context, reduces mid-conversation noise
-- Confidence threshold (>0.8) gates quality without user review in v1
-- 10-minute idle timeout balances responsiveness with context completeness
-
----
-
-### FLOW-002: Memory Retrieval (Output)
-
-```
-1. User says "use Squirrel" or triggers MCP
-2. AI CLI calls MCP tool: squirrel_get_memory
-3. Daemon queries project memory database
-4. Returns all memories grouped by category:
-
-   ## frontend
-   - memory 1
-   - memory 2
-
-   ## backend
-   - memory 3
-
-   ## docs_test
-   (none)
-
-   ## other
-   - memory 4
-
-5. Memories ordered by use_count (most used first)
+1. User says something memorable (e.g., "never use emoji")
+2. CLI reads CLAUDE.md trigger rules
+3. CLI calls MCP: squirrel_store_memory({type, content, tags})
+4. Squirrel checks for duplicates:
+   - Exact match: increment use_count
+   - No match: insert new memory
+5. Squirrel returns success
 ```
 
 ---
 
-### FLOW-003: Garbage Collection
+### FLOW-002: Memory Retrieval (Squirrel → CLI)
 
 ```
-Periodic cleanup (configurable interval):
-
-1. Find memories with use_count = 0 AND age > threshold
-2. Mark as candidates for deletion
-3. On next extraction, if similar memory extracted:
-   - Cancel deletion, merge instead
-4. Otherwise, delete after grace period
+1. CLI calls MCP: squirrel_get_memory({type?, tags?})
+2. Squirrel queries SQLite
+3. Returns memories ordered by use_count DESC
+4. CLI uses in context
 ```
 
 ---
 
-### FLOW-004: Doc Indexing
-
-**Timing:** On doc file change (create/modify/rename)
+### FLOW-003: Session Start (Skill)
 
 ```
-1. Daemon detects doc file change (notify)
-2. Check if file matches configured patterns:
-   - Extensions: md, mdc, txt, rst (configurable)
-   - Include paths: specs/, docs/, .claude/, .cursor/
-   - Exclude paths: node_modules/, target/, .git/
-3. If match, send file content to Python service
-4. Doc Summarizer (Flash model):
-   - Generates 1-2 sentence summary
-   - Returns summary text
-5. Daemon stores in docs_index table:
-   - path, summary, content_hash, last_indexed
-6. MCP tool can now return updated tree
+1. New CLI session begins
+2. Skill auto-triggers (user-invocable: false)
+3. Skill instructs CLI to call squirrel_get_memory(type: "preference")
+4. CLI displays preferences in context
+5. User's preferences guide the session
 ```
-
-**Key Design Decisions:**
-- Only index files matching configured patterns (avoid noise)
-- Content hash detects actual changes (not just mtime)
-- LLM summarizes for human+AI readability
 
 ---
 
-### FLOW-005: Git Detection and Hook Installation
-
-**Timing:** On `.git/` directory creation
+### FLOW-004: Doc Debt Detection
 
 ```
-1. Daemon watches project directory
-2. Detects `.git/` directory created (git init)
-3. Automatically installs git hooks:
-   - post-commit: records doc debt
-   - pre-push: warns if doc debt exists (optional block)
-4. Logs: "Git detected, hooks installed"
-```
-
-**Key Design Decisions:**
-- Auto-install removes friction (no manual hook setup)
-- Hooks call hidden internal commands
-- User can disable in config if needed
-
----
-
-### FLOW-006: Doc Debt Detection
-
-**Timing:** On git commit (via post-commit hook)
-
-```
-1. Post-commit hook calls: sqrl _internal docguard-record
-2. Daemon analyzes commit diff:
-   - Which code files changed?
-   - Which docs should have been updated? (based on rules)
-3. Detection rules (priority order):
-   a. User config (.sqrl/config.yaml mappings)
+1. User commits code
+2. Git post-commit hook calls: sqrl _internal docguard-record
+3. Squirrel analyzes commit diff:
+   a. User config mappings (.sqrl/config.yaml)
    b. Reference-based (code contains SCHEMA-001 → SCHEMAS.md)
    c. Pattern-based (*.rs → ARCHITECTURE.md)
 4. If code changed but related docs didn't:
-   - Record doc debt entry
-5. Doc debt visible via:
-   - sqrl status
-   - MCP tool: squirrel_get_doc_debt
-   - Dashboard
+   - Record doc debt entry in SQLite
+5. CLI sees debt via CLAUDE.md instructions or sqrl status
 ```
 
-**Key Design Decisions:**
-- Deterministic detection (no LLM for debt detection)
-- Config > References > Patterns (priority order)
-- Debt is informational, enforcement is optional (pre-push or CI)
+---
+
+### FLOW-005: Git Hook Installation
+
+```
+1. sqrl init detects .git/ exists
+2. Installs hooks to .git/hooks/:
+   - post-commit: sqrl _internal docguard-record
+   - pre-push: sqrl _internal docguard-check
+3. Hooks are self-contained (no daemon required)
+```
 
 ---
 
@@ -350,64 +214,32 @@ Periodic cleanup (configurable interval):
 | Command | Action |
 |---------|--------|
 | `sqrl` | Show help |
-| `sqrl init` | Initialize project silently (creates .sqrl/ with defaults) |
-| `sqrl init --no-history` | Initialize without processing historical logs |
-| `sqrl on` | Enable watcher daemon |
-| `sqrl off` | Disable watcher daemon |
+| `sqrl init` | Initialize project (create .sqrl/, hooks, skill file) |
 | `sqrl goaway` | Remove all Squirrel data from project |
-| `sqrl config` | Open configuration in browser |
 | `sqrl status` | Show project status including doc debt |
+| `sqrl mcp-serve` | Start MCP server (called by CLI tool config) |
 
-Memory and configuration management via Dashboard (web UI).
-
-**Hidden internal commands** (called by hooks, not user-facing):
+**Hidden internal commands** (called by hooks):
 - `sqrl _internal docguard-record` - Record doc debt after commit
 - `sqrl _internal docguard-check` - Check doc debt before push
 
 ---
 
-## Dashboard (Web UI)
-
-| Feature | Free | Team (B2B) |
-|---------|------|------------|
-| View/edit personal style | ✅ | ✅ |
-| View/edit project memory | ✅ | ✅ |
-| Memory categories management | ✅ | ✅ |
-| Tool configuration (Claude Code, Cursor, etc.) | ✅ | ✅ |
-| Doc patterns configuration | ✅ | ✅ |
-| Doc debt view | ✅ | ✅ |
-| Team style management | ❌ | ✅ |
-| Team member management | ❌ | ✅ |
-| Cloud sync | ❌ | ✅ |
-| Activity analytics | ❌ | ✅ |
-
----
-
-## Team Features (B2B)
-
-### Data Hierarchy
+## Files Created by `sqrl init`
 
 ```
-Personal Style (local, not synced)
-      ↓ override
-Team Style (cloud synced, read-only for members)
-      ↓ merged with
-Project Memory (cloud synced, team shared)
+<repo>/
+├── .sqrl/
+│   ├── config.yaml          # Doc patterns, hook settings
+│   └── memory.db            # SQLite (memories + doc debt)
+├── .claude/
+│   └── skills/
+│       └── squirrel-session/
+│           └── SKILL.md     # Session start skill
+└── .git/hooks/
+    ├── post-commit          # Doc debt recording
+    └── pre-push             # Doc debt check (optional block)
 ```
-
-### Sync Flow
-
-```
-Local daemon extract → Push to cloud → Cloud deduplicates/merges → Sync to team
-```
-
-### Roles
-
-| Role | Permissions |
-|------|-------------|
-| Owner | All + billing |
-| Admin | Edit team style, manage members |
-| Member | Contribute project memory, view all |
 
 ---
 
@@ -415,28 +247,36 @@ Local daemon extract → Push to cloud → Cloud deduplicates/merges → Sync to
 
 | Category | Technology | Notes |
 |----------|------------|-------|
-| **Rust Daemon** | | |
-| Storage | SQLite + sqlite-vec | Local-first, vector search |
-| IPC | JSON-RPC 2.0 | Over Unix socket |
+| Language | Rust | Single binary, no runtime deps |
+| Storage | SQLite | Local-first, single file |
 | MCP SDK | rmcp | Official Rust SDK |
 | CLI | clap | Minimal commands |
-| File Watching | notify (PollWatcher) | WSL/9p compatible (ADR-020) |
-| **Python Service** | | |
-| LLM Client | LiteLLM | Multi-provider |
-| Agent Framework | PydanticAI | Structured outputs |
-| **Build** | | |
-| Rust | cargo-dist | Single binary |
-| Python | PyInstaller | Bundled |
+| Build | cargo-dist | Single binary distribution |
+
+---
+
+## What Was Removed (ADR-021)
+
+| Removed | Why |
+|---------|-----|
+| Python Memory Service | CLI handles memory decisions |
+| Daemon log watching | No longer needed |
+| History processing | Not needed |
+| IPC (Unix socket) | No Python service to talk to |
+| LLM calls (Gemini) | CLI AI handles all intelligence |
+| systemd/launchd service | No persistent daemon needed |
+| Dashboard | Future feature, not v1 |
+| sqlite-vec | No embedding search needed |
 
 ---
 
 ## Platform Support
 
-| Platform | Log Locations | Socket |
-|----------|---------------|--------|
-| macOS | `~/Library/Application Support/*/` | `/tmp/sqrl.sock` |
-| Linux | `~/.config/*/` | `/tmp/sqrl.sock` |
-| Windows | `%APPDATA%\*\` | `\\.\pipe\sqrl` |
+| Platform | MCP Config | Hooks |
+|----------|------------|-------|
+| macOS | `claude mcp add squirrel -- sqrl mcp-serve` | `.git/hooks/` |
+| Linux/WSL | `claude mcp add squirrel -- sqrl mcp-serve` | `.git/hooks/` |
+| Windows | `claude mcp add squirrel -- sqrl.exe mcp-serve` | `.git/hooks/` |
 
 ---
 
@@ -444,7 +284,18 @@ Local daemon extract → Push to cloud → Cloud deduplicates/merges → Sync to
 
 | Boundary | Enforcement |
 |----------|-------------|
-| Daemon has no network | Rust compile-time |
-| LLM keys in Python only | Environment variables |
+| No network in Squirrel | Rust binary has no HTTP client |
+| No LLM keys | Squirrel makes zero API calls |
 | Project isolation | Separate DB per project |
-| No secrets in memories | Extractor constraint |
+| No secrets in memories | CLI responsibility (via CLAUDE.md) |
+
+---
+
+## Future (Not v1)
+
+| Feature | When |
+|---------|------|
+| Dashboard (web UI) | v2 |
+| Memory deduplication AI | Cloud version |
+| Team sync | Cloud version |
+| Embedding search | v2 if needed |

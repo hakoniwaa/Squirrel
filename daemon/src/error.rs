@@ -1,8 +1,8 @@
-//! Error types for the Squirrel daemon.
+//! Error types for Squirrel.
 
 use thiserror::Error;
 
-/// Daemon error type.
+/// Squirrel error type.
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("IO error: {0}")]
@@ -11,20 +11,11 @@ pub enum Error {
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
-    #[error("File watch error: {0}")]
-    Watch(#[from] notify::Error),
-
     #[error("SQLite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
 
-    #[error("IPC error: {0}")]
-    Ipc(String),
-
-    #[error("Session not found: {0}")]
-    SessionNotFound(String),
-
-    #[error("Invalid log entry: {0}")]
-    InvalidLogEntry(String),
+    #[error("MCP error: {0}")]
+    Mcp(String),
 
     #[error("Home directory not found")]
     HomeDirNotFound,
@@ -34,21 +25,4 @@ pub enum Error {
 
     #[error("Config parse error: {0}")]
     ConfigParse(String),
-}
-
-/// IPC error codes from INTERFACES.md.
-#[derive(Debug, Clone, Copy)]
-#[repr(i32)]
-#[allow(dead_code)]
-pub enum IpcErrorCode {
-    ParseError = -32700,
-    InvalidRequest = -32600,
-    MethodNotFound = -32601,
-    InvalidParams = -32602,
-    InternalError = -32603,
-    ProjectNotInitialized = -32001,
-    DaemonNotRunning = -32002,
-    LlmError = -32003,
-    InvalidProjectRoot = -32004,
-    NoMemoriesFound = -32005,
 }

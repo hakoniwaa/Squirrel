@@ -1,161 +1,58 @@
 # Squirrel Schemas
 
-Database schemas for user styles and project memories.
+Database schema for project memories and doc debt. Single database per project.
 
 ---
 
-## Database Files
+## Database File
 
 | Database | Location | Purpose |
 |----------|----------|---------|
-| User Style DB | `~/.sqrl/user_style.db` | Personal development style preferences |
-| Project Memory DB | `<repo>/.sqrl/memory.db` | Project-specific knowledge |
+| Project DB | `<repo>/.sqrl/memory.db` | Memories + doc debt |
 
 ---
 
-## SCHEMA-001: user_styles
+## SCHEMA-001: memories
 
-Personal development style preferences. Synced to agent.md files.
-
-```sql
-CREATE TABLE user_styles (
-  id          TEXT PRIMARY KEY,           -- UUID
-  text        TEXT NOT NULL UNIQUE,       -- Style description
-  use_count   INTEGER DEFAULT 1,          -- Times reinforced/extracted
-  created_at  TEXT NOT NULL,              -- ISO 8601
-  updated_at  TEXT NOT NULL               -- ISO 8601
-);
-
-CREATE INDEX idx_user_styles_use_count ON user_styles(use_count DESC);
-```
-
-### Examples
-
-| text |
-|------|
-| "Prefer async/await over callbacks" |
-| "Never use emoji in code or comments" |
-| "Commits should use minimal English" |
-| "AI should maintain critical, calm attitude" |
-
----
-
-## SCHEMA-002: project_memories
-
-Project-specific knowledge, organized by category.
+All memories stored in a single table with type field.
 
 ```sql
-CREATE TABLE project_memories (
+CREATE TABLE memories (
   id           TEXT PRIMARY KEY,          -- UUID
-  category     TEXT NOT NULL,             -- 'frontend' | 'backend' | 'docs_test' | 'other'
-  subcategory  TEXT NOT NULL DEFAULT 'main',  -- User-defined subcategory
-  text         TEXT NOT NULL,             -- Memory content
-  use_count    INTEGER DEFAULT 1,         -- Times reinforced/extracted
+  memory_type  TEXT NOT NULL,             -- 'preference' | 'project' | 'decision' | 'solution'
+  content      TEXT NOT NULL,             -- Memory content (1-2 sentences)
+  tags         TEXT DEFAULT '[]',         -- JSON array of tags
+  use_count    INTEGER DEFAULT 1,         -- Times stored/reinforced
   created_at   TEXT NOT NULL,             -- ISO 8601
   updated_at   TEXT NOT NULL              -- ISO 8601
 );
 
-CREATE INDEX idx_project_memories_category ON project_memories(category);
-CREATE INDEX idx_project_memories_subcategory ON project_memories(category, subcategory);
-CREATE INDEX idx_project_memories_use_count ON project_memories(use_count DESC);
+CREATE INDEX idx_memories_type ON memories(memory_type);
+CREATE INDEX idx_memories_use_count ON memories(use_count DESC);
 ```
 
-### Default Categories
+### Memory Types
 
-| Category | Description |
-|----------|-------------|
-| `frontend` | Frontend architecture, components, styling |
-| `backend` | Backend architecture, APIs, database |
-| `docs_test` | Documentation, testing conventions |
-| `other` | Everything else |
+| Type | Description | Examples |
+|------|-------------|---------|
+| `preference` | User's coding style | "No emojis", "Use Gemini 3 Pro" |
+| `project` | Project-specific knowledge | "Use httpx not requests" |
+| `decision` | Architecture decisions | "Chose PostgreSQL for transactions" |
+| `solution` | Problem-solution pairs | "Fixed SSL by switching to httpx" |
 
 ### Examples
 
-| category | subcategory | text |
-|----------|-------------|------|
-| backend | main | "Use httpx as HTTP client, not requests" |
-| backend | database | "PostgreSQL 16 for main database" |
-| frontend | main | "Component library uses shadcn/ui" |
-| docs_test | main | "Tests use pytest with fixtures in conftest.py" |
+| memory_type | content | tags | use_count |
+|-------------|---------|------|-----------|
+| preference | No emojis in code or commits | ["style"] | 5 |
+| preference | Use Gemini 3 Pro, not Claude or older models | ["tooling", "llm"] | 3 |
+| project | Use httpx as HTTP client, not requests | ["backend", "http"] | 4 |
+| decision | Chose SQLite over PostgreSQL for local storage | ["database", "architecture"] | 2 |
+| solution | Fixed SSL error by switching from requests to httpx | ["backend", "ssl", "fix"] | 1 |
 
 ---
 
-## SCHEMA-003: categories
-
-Custom category/subcategory definitions.
-
-```sql
-CREATE TABLE categories (
-  id           TEXT PRIMARY KEY,          -- UUID
-  category     TEXT NOT NULL,             -- Category name
-  subcategory  TEXT NOT NULL,             -- Subcategory name
-  created_at   TEXT NOT NULL,             -- ISO 8601
-  UNIQUE(category, subcategory)
-);
-```
-
-### Default Data
-
-```sql
-INSERT INTO categories (id, category, subcategory, created_at) VALUES
-  ('cat-1', 'frontend', 'main', datetime('now')),
-  ('cat-2', 'backend', 'main', datetime('now')),
-  ('cat-3', 'docs_test', 'main', datetime('now')),
-  ('cat-4', 'other', 'main', datetime('now'));
-```
-
----
-
-## SCHEMA-004: extraction_log
-
-Track extraction history for debugging and analytics.
-
-```sql
-CREATE TABLE extraction_log (
-  id              TEXT PRIMARY KEY,       -- UUID
-  episode_start   TEXT NOT NULL,          -- ISO 8601
-  episode_end     TEXT NOT NULL,          -- ISO 8601
-  events_count    INTEGER NOT NULL,       -- Number of events processed
-  skipped         INTEGER NOT NULL,       -- 1 if skipped by cleaner
-  styles_added    INTEGER DEFAULT 0,      -- User styles added
-  styles_updated  INTEGER DEFAULT 0,      -- User styles updated
-  memories_added  INTEGER DEFAULT 0,      -- Project memories added
-  memories_updated INTEGER DEFAULT 0,     -- Project memories updated
-  created_at      TEXT NOT NULL           -- ISO 8601
-);
-
-CREATE INDEX idx_extraction_log_created ON extraction_log(created_at DESC);
-```
-
----
-
-## SCHEMA-005: docs_index
-
-Indexed documentation files with LLM-generated summaries.
-
-```sql
-CREATE TABLE docs_index (
-  id            TEXT PRIMARY KEY,           -- UUID
-  path          TEXT NOT NULL UNIQUE,       -- Relative path from project root
-  summary       TEXT NOT NULL,              -- LLM-generated 1-2 sentence summary
-  content_hash  TEXT NOT NULL,              -- SHA-256 of file content
-  last_indexed  TEXT NOT NULL               -- ISO 8601
-);
-
-CREATE INDEX idx_docs_index_path ON docs_index(path);
-```
-
-### Examples
-
-| path | summary |
-|------|---------|
-| specs/ARCHITECTURE.md | System boundaries, Rust daemon vs Python service split, data flow |
-| specs/SCHEMAS.md | SQLite table definitions for memories, styles, projects |
-| .claude/CLAUDE.md | Project rules for Claude Code AI assistant |
-
----
-
-## SCHEMA-006: doc_debt
+## SCHEMA-002: doc_debt
 
 Tracked documentation debt per commit.
 
@@ -186,72 +83,30 @@ CREATE INDEX idx_doc_debt_resolved ON doc_debt(resolved);
 
 ---
 
-## Team Schema (B2B Cloud)
-
-For team features, additional cloud-side schemas.
-
-### team_styles
-
-Team-level development style (managed by admin).
-
-```sql
-CREATE TABLE team_styles (
-  id          TEXT PRIMARY KEY,
-  team_id     TEXT NOT NULL,
-  text        TEXT NOT NULL,
-  promoted_by TEXT,                       -- User ID who promoted this
-  promoted_at TEXT,                       -- When promoted from personal
-  created_at  TEXT NOT NULL,
-  updated_at  TEXT NOT NULL,
-  FOREIGN KEY (team_id) REFERENCES teams(id)
-);
-```
-
-### teams
-
-Team management.
-
-```sql
-CREATE TABLE teams (
-  id          TEXT PRIMARY KEY,
-  name        TEXT NOT NULL,
-  owner_id    TEXT NOT NULL,
-  created_at  TEXT NOT NULL,
-  updated_at  TEXT NOT NULL
-);
-```
-
-### team_members
-
-Team membership.
-
-```sql
-CREATE TABLE team_members (
-  id          TEXT PRIMARY KEY,
-  team_id     TEXT NOT NULL,
-  user_id     TEXT NOT NULL,
-  role        TEXT NOT NULL,              -- 'owner' | 'admin' | 'member'
-  joined_at   TEXT NOT NULL,
-  FOREIGN KEY (team_id) REFERENCES teams(id),
-  UNIQUE(team_id, user_id)
-);
-```
-
----
-
 ## use_count Semantics
 
-The `use_count` field tracks how many times a memory has been extracted or reinforced.
+The `use_count` field tracks how many times a memory has been stored or reinforced.
 
 | Event | Action |
 |-------|--------|
-| New memory extracted | use_count = 1 |
-| Similar memory extracted again | use_count++ on existing |
-| Duplicate memory extracted | use_count++ on existing |
+| CLI stores new memory | use_count = 1 |
+| CLI stores duplicate/similar memory | use_count++ on existing |
+| MCP get_memory returns memory | No change (read-only) |
 
 **Ordering:** Memories with higher use_count appear first in MCP responses.
 
-**Garbage Collection:** Memories with use_count = 0 (edge case) and age > threshold are candidates for deletion.
+---
+
+## What Was Removed (ADR-021)
+
+| Old Schema | Status | Reason |
+|------------|--------|--------|
+| SCHEMA-001: user_styles | Merged | Now `memories` with type "preference" |
+| SCHEMA-002: project_memories | Merged | Now `memories` with type "project" |
+| SCHEMA-003: categories | Removed | Tags replace categories |
+| SCHEMA-004: extraction_log | Removed | No extraction pipeline |
+| SCHEMA-005: docs_index | Removed | No LLM doc summaries |
+| Team schemas | Deferred | Future cloud version |
 
 ---
 
@@ -259,15 +114,12 @@ The `use_count` field tracks how many times a memory has been extracted or reinf
 
 ### From Old Schema
 
-If migrating from the previous CR-Memory based schema:
+If migrating from the previous multi-table schema:
 
-| Old Field | Action |
+| Old Table | Action |
 |-----------|--------|
-| `tier` | Remove (no longer used) |
-| `status` | Remove (no longer used) |
-| `kind` | Map to category or remove |
-| `memory_metrics` | Extract use_count, discard rest |
-| `evidence` | Remove (no longer tracked) |
-| `episodes` | Remove (no longer stored) |
-
-All memories start fresh with use_count = 1.
+| `user_styles` | Move to `memories` with type "preference" |
+| `project_memories` | Move to `memories` with type "project" |
+| `categories` | Convert category to tags |
+| `extraction_log` | Drop |
+| `docs_index` | Drop |
