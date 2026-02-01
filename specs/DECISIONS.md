@@ -274,10 +274,10 @@ Team features require cloud service for sync and management.
 
 **Status:** accepted
 **Date:** 2025-01-20
-**Updated:** 2025-01-25
+**Updated:** 2025-02-01
 
 **Context:**
-Previous design had many CLI commands (search, forget, export, flush, policy). With Dashboard for editing, most CLI commands are unnecessary.
+Previous design had many CLI commands (search, forget, export, flush, policy). Most are unnecessary.
 
 **Decision:**
 Reduce CLI to essential commands:
@@ -285,21 +285,19 @@ Reduce CLI to essential commands:
 | Command | Purpose |
 |---------|---------|
 | `sqrl` | Show help |
-| `sqrl init [--no-history]` | Initialize project (30 days history by default) |
-| `sqrl on` | Enable watcher daemon |
-| `sqrl off` | Disable watcher daemon |
+| `sqrl init` | Initialize project |
 | `sqrl goaway [-f]` | Remove all Squirrel data |
-| `sqrl config` | Open Dashboard in browser |
+| `sqrl status` | Show memories and doc debt |
+| `sqrl mcp-serve` | Start MCP server (called by AI tool) |
 
-All other operations (edit, delete, search) happen in Dashboard.
+Hidden internal commands for git hooks:
+- `sqrl _internal docguard-record`
+- `sqrl _internal docguard-check`
 
 **Consequences:**
 - (+) Simpler CLI, less code to maintain
-- (+) Dashboard provides better UX for editing
-- (+) Consistent experience across operations
-- (+) Clear daemon control via on/off
+- (+) Memory management via MCP (AI does it)
 - (-) No quick command-line memory search
-- (-) Requires browser for management
 
 ---
 
@@ -371,35 +369,32 @@ Hidden command `sqrl watch-daemon` runs the actual watcher loop. System service 
 
 **Status:** accepted
 **Date:** 2025-01-26
+**Updated:** 2025-02-01
 
 **Context:**
-AI tools often forget to update documentation when code changes. Projects have many docs (specs, README, etc.) that drift from reality. Need a way to:
-1. Make docs discoverable to AI tools
-2. Detect when docs are stale
-3. Remind AI to update docs
+AI tools often forget to update documentation when code changes. Projects have many docs (specs, README, etc.) that drift from reality. Need a way to detect when docs are stale and remind AI to update.
 
 **Decision:**
-Add doc awareness to Squirrel:
+Add doc debt tracking to Squirrel via git hooks:
 
 | Component | Purpose |
 |-----------|---------|
-| Doc Watcher | Watch doc files for changes (create/modify/rename) |
-| Doc Indexer | Store doc tree with LLM summaries |
-| Doc Debt Tracker | Detect when code changes but related docs don't |
-| MCP Tools | Expose doc tree and debt status to AI tools |
+| Post-commit hook | Record doc debt when code changes but related docs don't |
+| Pre-push hook | Warn (or block) if unresolved doc debt exists |
+| Config mappings | User-defined code→doc relationships |
+| Auto-resolve | Debt resolved when expected docs updated in later commit |
 
 Detection rules (priority order):
-1. User config mappings (highest priority, eliminates false positives)
+1. User config mappings (seeded by `sqrl init`, editable in `.sqrl/config.yaml`)
 2. Reference-based (code contains SCHEMA-001 → SCHEMAS.md)
-3. Pattern-based (*.rs → ARCHITECTURE.md)
+3. Fallback (none by default)
 
 **Consequences:**
-- (+) AI tools can see project doc structure
 - (+) Doc staleness is tracked and visible
-- (+) Deterministic detection (no LLM for debt detection)
+- (+) Deterministic detection (no LLM)
 - (+) User can configure mappings to reduce false positives
-- (-) Adds complexity to daemon
-- (-) Requires LLM calls for doc summarization
+- (+) Auto-resolves when docs are updated
+- (-) No doc tree or doc summaries (CLI AI reads docs directly)
 
 ---
 
@@ -407,21 +402,23 @@ Detection rules (priority order):
 
 **Status:** accepted
 **Date:** 2025-01-26
+**Updated:** 2025-02-01
 
 **Context:**
 Previous design had `sqrl init` ask questions about which tools to use. This adds friction and confusion.
 
 **Decision:**
 Make `sqrl init` completely silent:
-- Creates `.sqrl/` with default config
+- Creates `.sqrl/` with default config (including seeded doc mappings)
 - No prompts, no questions
-- User configures tools and patterns in dashboard (`sqrl config`)
+- Auto-registers MCP server with enabled AI tools
+- User can edit `.sqrl/config.yaml` directly for customization
 
 **Consequences:**
 - (+) Zero friction init
 - (+) Works for any project (even blank)
-- (+) Configuration is visual and discoverable in dashboard
-- (-) User must open dashboard to configure
+- (+) Doc debt detection works out of the box
+- (-) User must edit config.yaml manually for custom mappings
 
 ---
 
@@ -429,35 +426,30 @@ Make `sqrl init` completely silent:
 
 **Status:** accepted
 **Date:** 2025-01-26
+**Updated:** 2025-02-01
 
 **Context:**
-Git hooks are needed for doc debt detection, but:
-- Manual hook installation is friction
-- Users forget to install hooks
-- Different git paths (IDEs, wrappers) may not trigger hooks
+Git hooks are needed for doc debt detection, but manual hook installation is friction.
 
 **Decision:**
-Daemon auto-installs hooks when `.git/` detected:
+`sqrl init` auto-installs hooks when `.git/` exists:
 
 ```
-Daemon running
-    ↓ watches project directory
-.git/ created (user runs git init)
-    ↓ daemon detects
-Auto-install hooks to .git/hooks/
+sqrl init
+    ↓ detects .git/
+Install hooks to .git/hooks/
     ↓
-post-commit: calls sqrl _internal docguard-record
-pre-push: calls sqrl _internal docguard-check (optional block)
+post-commit: sqrl _internal docguard-record
+pre-push: sqrl _internal docguard-check (optional block)
 ```
 
-Hooks are hidden internal commands, not user-facing.
+Hooks preserve existing user hooks (append, don't overwrite). `sqrl goaway` cleanly removes them.
 
 **Consequences:**
 - (+) Zero friction hook setup
-- (+) Works even if user inits git after sqrl
 - (+) No manual hook management
+- (+) Preserves existing hooks
 - (-) Hooks can still be bypassed (--no-verify)
-- (-) True enforcement requires CI (GitHub required checks)
 
 ---
 

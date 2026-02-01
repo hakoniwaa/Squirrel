@@ -130,15 +130,17 @@ sqrl init
 **Actions:**
 1. Create `.sqrl/` directory
 2. Create `.sqrl/memory.db` (empty SQLite)
-3. Write `.sqrl/config.yaml` with defaults
+3. Write `.sqrl/config.yaml` with defaults (including seeded doc mappings)
 4. Add `.sqrl/` to `.gitignore`
 5. If `.git/` exists: install git hooks
 6. Create `.claude/skills/squirrel-session/SKILL.md`
+7. Add Memory Protocol triggers to `.claude/CLAUDE.md`
+8. Register MCP server with enabled AI tools (e.g., `claude mcp add`)
 
 **Does NOT:**
-- Process historical logs
-- Start a daemon
 - Ask questions
+- Start a daemon
+- Process historical logs
 
 ---
 
@@ -156,9 +158,11 @@ sqrl goaway -f       # Skip confirmation (short form)
 **Actions:**
 1. Show what will be removed
 2. Prompt for confirmation (unless --force)
-3. Remove `.sqrl/` directory
-4. Remove git hooks (post-commit, pre-push)
+3. Remove git hooks (post-commit, pre-push)
+4. Unregister MCP server from enabled AI tools (e.g., `claude mcp remove`)
 5. Remove `.claude/skills/squirrel-session/`
+6. Remove Memory Protocol triggers from `.claude/CLAUDE.md`
+7. Remove `.sqrl/` directory
 
 **Does NOT remove:**
 - `.claude/` directory itself
@@ -299,24 +303,30 @@ You have access to Squirrel memory tools via MCP.
 ```yaml
 # Squirrel project configuration
 
+# AI tools enabled for this project
+tools:
+  claude_code: true
+  cursor: false
+  codex: false
+
 # Documentation indexing settings
 docs:
   extensions: [md, mdc, txt, rst]
   include_paths: [specs/, docs/, .claude/, .cursor/]
   exclude_paths: [node_modules/, target/, .git/, vendor/, dist/]
 
-# Doc debt detection rules
+# Doc debt detection rules (seeded by sqrl init)
 doc_rules:
   mappings:
-    - code: "src/storage/**/*.rs"
-      doc: "specs/SCHEMAS.md"
-    - code: "src/mcp/**/*.rs"
+    - code: "daemon/src/**/*.rs"
+      doc: "specs/ARCHITECTURE.md"
+    - code: "daemon/src/mcp/**/*.rs"
       doc: "specs/INTERFACES.md"
+    - code: "daemon/src/storage/**/*.rs"
+      doc: "specs/SCHEMAS.md"
   reference_patterns:
     - pattern: "SCHEMA-\\d+"
       doc: "specs/SCHEMAS.md"
-    - pattern: "IPC-\\d+"
-      doc: "specs/INTERFACES.md"
     - pattern: "MCP-\\d+"
       doc: "specs/INTERFACES.md"
     - pattern: "ADR-\\d+"

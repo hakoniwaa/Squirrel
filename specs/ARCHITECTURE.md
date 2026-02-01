@@ -186,13 +186,13 @@ CLI needs project context (user asks, or session start skill)
 ```
 1. User commits code
 2. Git post-commit hook calls: sqrl _internal docguard-record
-3. Squirrel analyzes commit diff:
-   a. User config mappings (.sqrl/config.yaml)
-   b. Reference-based (code contains SCHEMA-001 → SCHEMAS.md)
-   c. Pattern-based (*.rs → ARCHITECTURE.md)
-4. If code changed but related docs didn't:
+3. Auto-resolve: if docs were updated in this commit, resolve matching old debt
+4. Squirrel analyzes commit diff:
+   a. Config mappings (.sqrl/config.yaml doc_rules.mappings)
+   b. Reference patterns (code contains SCHEMA-001 → SCHEMAS.md)
+5. If code changed but related docs didn't:
    - Record doc debt entry in SQLite
-5. CLI sees debt via CLAUDE.md instructions or sqrl status
+6. CLI sees debt via CLAUDE.md instructions or sqrl status
 ```
 
 ---
@@ -214,8 +214,8 @@ CLI needs project context (user asks, or session start skill)
 | Command | Action |
 |---------|--------|
 | `sqrl` | Show help |
-| `sqrl init` | Initialize project (create .sqrl/, hooks, skill file) |
-| `sqrl goaway` | Remove all Squirrel data from project |
+| `sqrl init` | Initialize project (.sqrl/, hooks, skill, MCP registration) |
+| `sqrl goaway` | Remove all Squirrel data (including MCP unregistration) |
 | `sqrl status` | Show project status including doc debt |
 | `sqrl mcp-serve` | Start MCP server (called by CLI tool config) |
 
@@ -230,9 +230,10 @@ CLI needs project context (user asks, or session start skill)
 ```
 <repo>/
 ├── .sqrl/
-│   ├── config.yaml          # Doc patterns, hook settings
+│   ├── config.yaml          # Tools, doc mappings, hook settings
 │   └── memory.db            # SQLite (memories + doc debt)
 ├── .claude/
+│   ├── CLAUDE.md            # Memory Protocol triggers (appended)
 │   └── skills/
 │       └── squirrel-session/
 │           └── SKILL.md     # Session start skill
@@ -240,6 +241,8 @@ CLI needs project context (user asks, or session start skill)
     ├── post-commit          # Doc debt recording
     └── pre-push             # Doc debt check (optional block)
 ```
+
+Also registers MCP server with enabled AI tools (e.g., `claude mcp add squirrel`).
 
 ---
 
