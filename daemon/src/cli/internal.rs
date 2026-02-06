@@ -1,159 +1,14 @@
 //! Hidden internal commands for git hooks.
 
-use std::collections::HashSet;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
-use regex::Regex;
-use tracing::{debug, info};
+use tracing::debug;
 
-use crate::config::Config;
 use crate::error::Error;
-use crate::storage;
 
-/// Record doc debt after a commit (called by post-commit hook).
-pub fn docguard_record() -> Result<(), Error> {
-    // Find project root (walk up looking for .sqrl)
-    let project_root = match find_project_root() {
-        Some(path) => path,
-        None => {
-            debug!("Not a Squirrel project (no .sqrl found)");
-            return Ok(());
-        }
-    };
-
-    // Load config
-    let config = match Config::load(&project_root) {
-        Ok(c) => c,
-        Err(e) => {
-            debug!(error = %e, "Failed to load config, skipping doc debt recording");
-            return Ok(());
-        }
-    };
-
-    // Get last commit info
-    let (commit_sha, commit_message) = match get_last_commit_info() {
-        Some(info) => info,
-        None => {
-            debug!("Could not get last commit info");
-            return Ok(());
-        }
-    };
-
-    // Check if we already recorded debt for this commit
-    if storage::has_doc_debt_for_commit(&project_root, &commit_sha)? {
-        debug!(commit = %commit_sha, "Doc debt already recorded for commit");
-        return Ok(());
-    }
-
-    // Get changed files from last commit
-    let changed_files = get_changed_files_from_commit(&commit_sha);
-    if changed_files.is_empty() {
-        debug!("No changed files in commit");
-        return Ok(());
-    }
-
-    // Separate code files from doc files
-    let (code_files, doc_files): (Vec<_>, Vec<_>) = changed_files
-        .iter()
-        .partition(|f| !is_doc_file(f, &config.docs.extensions));
-
-    if code_files.is_empty() {
-        debug!("No code files changed");
-        return Ok(());
-    }
-
-    // Detect expected doc updates using all three detection rules
-    let mut expected_docs: HashSet<String> = HashSet::new();
-    let mut detection_rules: HashSet<String> = HashSet::new();
-
-    // Rule 1: Config mappings (highest priority)
-    for mapping in &config.doc_rules.mappings {
-        for code_file in &code_files {
-            if matches_glob_pattern(code_file, &mapping.code) {
-                expected_docs.insert(mapping.doc.clone());
-                detection_rules.insert("config".to_string());
-            }
-        }
-    }
-
-    // Rule 2: Reference patterns (e.g., SCHEMA-001 in code)
-    for code_file in &code_files {
-        let file_path = project_root.join(code_file);
-        if let Ok(content) = fs::read_to_string(&file_path) {
-            for ref_pattern in &config.doc_rules.reference_patterns {
-                if let Ok(re) = Regex::new(&ref_pattern.pattern) {
-                    if re.is_match(&content) {
-                        expected_docs.insert(ref_pattern.doc.clone());
-                        detection_rules.insert("reference".to_string());
-                    }
-                }
-            }
-        }
-    }
-
-    // Rule 3: Default patterns based on file extension
-    for code_file in &code_files {
-        if let Some(doc) = get_default_doc_for_file(code_file) {
-            expected_docs.insert(doc);
-            detection_rules.insert("pattern".to_string());
-        }
-    }
-
-    // Remove docs that were actually updated in this commit
-    for doc_file in &doc_files {
-        expected_docs.remove(*doc_file);
-    }
-
-    // If no expected docs remain, no debt
-    if expected_docs.is_empty() {
-        debug!("No doc debt detected");
-        return Ok(());
-    }
-
-    // Determine primary detection rule
-    let detection_rule = if detection_rules.contains("config") {
-        "config"
-    } else if detection_rules.contains("reference") {
-        "reference"
-    } else {
-        "pattern"
-    };
-
-    // Auto-resolve existing debt if docs were updated in this commit
-    if !doc_files.is_empty() {
-        let doc_file_list: Vec<String> = doc_files.iter().map(|s| s.to_string()).collect();
-        if let Err(e) = storage::resolve_doc_debt_by_docs(&project_root, &doc_file_list) {
-            debug!(error = %e, "Failed to auto-resolve doc debt");
-        }
-    }
-
-    // Store doc debt
-    let code_files_vec: Vec<String> = code_files.into_iter().cloned().collect();
-    let expected_docs_vec: Vec<String> = expected_docs.into_iter().collect();
-
-    storage::add_doc_debt(
-        &project_root,
-        &commit_sha,
-        Some(&commit_message),
-        &code_files_vec,
-        &expected_docs_vec,
-        detection_rule,
-    )?;
-
-    info!(
-        commit = %commit_sha,
-        code_files = code_files_vec.len(),
-        expected_docs = expected_docs_vec.len(),
-        rule = detection_rule,
-        "Recorded doc debt"
-    );
-
-    Ok(())
-}
-
-/// Check doc debt before push (called by pre-push hook).
+/// Show diff summary before push (called by pre-push hook).
+/// AI reads this output and decides if docs need updating.
 pub fn docguard_check() -> Result<bool, Error> {
     // Find project root
     let project_root = match find_project_root() {
@@ -164,47 +19,50 @@ pub fn docguard_check() -> Result<bool, Error> {
         }
     };
 
-    // Load config
-    let config = match Config::load(&project_root) {
-        Ok(c) => c,
-        Err(_) => {
-            // Can't load config, allow push
-            return Ok(true);
-        }
-    };
-
-    // Get unresolved doc debt
-    let debts = storage::get_unresolved_doc_debt(&project_root)?;
-
-    if debts.is_empty() {
+    // Get commits that will be pushed
+    let commits = get_unpushed_commits();
+    if commits.is_empty() {
+        // Nothing to push
         return Ok(true);
     }
 
-    // Print warning
-    eprintln!(
-        "⚠️  Doc debt detected! {} commits have unupdated docs:",
-        debts.len()
-    );
-    eprintln!();
-
-    for debt in &debts {
-        let short_sha = &debt.commit_sha[..7.min(debt.commit_sha.len())];
-        let msg = debt.commit_message.as_deref().unwrap_or("(no message)");
-        eprintln!("  {} {}", short_sha, msg);
-        eprintln!("    Expected docs: {}", debt.expected_docs.join(", "));
-        eprintln!();
+    // Get combined diff stats
+    let diff_stats = get_diff_stats_for_push();
+    if diff_stats.is_empty() {
+        return Ok(true);
     }
 
-    eprintln!("Run 'sqrl status' for details.");
+    // Find doc files in the project
+    let doc_files = find_doc_files(&project_root);
 
-    // Return based on pre_push_block setting
-    if config.hooks.pre_push_block {
-        eprintln!("Push blocked. Update docs or use 'git push --no-verify' to bypass.");
-        Ok(false)
-    } else {
-        eprintln!("Warning only. Push will continue.");
-        Ok(true)
+    // Print the summary for AI to review
+    println!();
+    println!("═══════════════════════════════════════════════════════════════");
+    println!(" Squirrel: Review changes before push");
+    println!("═══════════════════════════════════════════════════════════════");
+    println!();
+    println!(" Commits to push: {}", commits.len());
+    println!();
+    println!(" Files changed:");
+    for stat in &diff_stats {
+        println!("   {}", stat);
     }
+    println!();
+
+    if !doc_files.is_empty() {
+        println!(" Doc files in repo:");
+        for doc in &doc_files {
+            println!("   {}", doc);
+        }
+        println!();
+    }
+
+    println!(" → Review if any docs need updating based on these changes.");
+    println!("═══════════════════════════════════════════════════════════════");
+    println!();
+
+    // Always allow push - this is informational only
+    Ok(true)
 }
 
 /// Find project root by walking up directories looking for .sqrl.
@@ -220,35 +78,34 @@ fn find_project_root() -> Option<PathBuf> {
     }
 }
 
-/// Get last commit SHA and message.
-fn get_last_commit_info() -> Option<(String, String)> {
+/// Get list of commits that will be pushed (not yet on remote).
+fn get_unpushed_commits() -> Vec<String> {
+    // Get the upstream branch
+    let upstream = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "@{upstream}"])
+        .output();
+
+    let upstream_ref = match upstream {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        _ => {
+            // No upstream, compare against origin/main or origin/master
+            let main_exists = Command::new("git")
+                .args(["rev-parse", "--verify", "origin/main"])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+
+            if main_exists {
+                "origin/main".to_string()
+            } else {
+                "origin/master".to_string()
+            }
+        }
+    };
+
+    // Get commits between upstream and HEAD
     let output = Command::new("git")
-        .args(["log", "-1", "--format=%H%n%s"])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut lines = stdout.lines();
-    let sha = lines.next()?.to_string();
-    let message = lines.next().unwrap_or("").to_string();
-
-    Some((sha, message))
-}
-
-/// Get list of files changed in a commit.
-fn get_changed_files_from_commit(commit_sha: &str) -> Vec<String> {
-    let output = Command::new("git")
-        .args([
-            "diff-tree",
-            "--no-commit-id",
-            "--name-only",
-            "-r",
-            commit_sha,
-        ])
+        .args(["log", "--oneline", &format!("{}..HEAD", upstream_ref)])
         .output();
 
     match output {
@@ -260,29 +117,88 @@ fn get_changed_files_from_commit(commit_sha: &str) -> Vec<String> {
     }
 }
 
-/// Check if a file is a documentation file.
-fn is_doc_file(path: &str, doc_extensions: &[String]) -> bool {
-    let path = Path::new(path);
-    if let Some(ext) = path.extension() {
-        let ext_str = ext.to_string_lossy().to_lowercase();
-        return doc_extensions.iter().any(|e| e.to_lowercase() == ext_str);
+/// Get diff stats for changes being pushed.
+fn get_diff_stats_for_push() -> Vec<String> {
+    // Get the upstream branch
+    let upstream = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "@{upstream}"])
+        .output();
+
+    let upstream_ref = match upstream {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        _ => {
+            let main_exists = Command::new("git")
+                .args(["rev-parse", "--verify", "origin/main"])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+
+            if main_exists {
+                "origin/main".to_string()
+            } else {
+                "origin/master".to_string()
+            }
+        }
+    };
+
+    // Get diff stat
+    let output = Command::new("git")
+        .args([
+            "diff",
+            "--stat",
+            "--stat-width=60",
+            &format!("{}..HEAD", upstream_ref),
+        ])
+        .output();
+
+    match output {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            stdout
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .filter(|line| !line.contains("files changed"))
+                .filter(|line| !line.contains("file changed"))
+                .map(|line| line.trim().to_string())
+                .collect()
+        }
+        _ => vec![],
     }
-    false
 }
 
-/// Check if a path matches a glob pattern.
-fn matches_glob_pattern(path: &str, pattern: &str) -> bool {
-    // Simple glob matching using the glob crate's pattern
-    if let Ok(glob_pattern) = glob::Pattern::new(pattern) {
-        return glob_pattern.matches(path);
-    }
-    false
-}
+/// Find documentation files in the project.
+fn find_doc_files(project_root: &PathBuf) -> Vec<String> {
+    let mut docs = Vec::new();
 
-/// Get default doc file for a code file based on extension.
-/// Fallback when no config mappings match.
-fn get_default_doc_for_file(_path: &str) -> Option<String> {
-    // Default mappings are now seeded in config.yaml by sqrl init.
-    // This function is a fallback for projects that cleared their mappings.
-    None
+    // Common doc locations
+    let doc_patterns = [
+        "README.md",
+        "CHANGELOG.md",
+        "docs/*.md",
+        "specs/*.md",
+        ".claude/*.md",
+        "*.md",
+    ];
+
+    for pattern in &doc_patterns {
+        if let Ok(entries) = glob::glob(&project_root.join(pattern).to_string_lossy()) {
+            for entry in entries.flatten() {
+                if let Ok(relative) = entry.strip_prefix(project_root) {
+                    let path_str = relative.to_string_lossy().to_string();
+                    // Skip node_modules, target, etc.
+                    if !path_str.contains("node_modules")
+                        && !path_str.contains("target/")
+                        && !path_str.contains(".git/")
+                        && !docs.contains(&path_str)
+                    {
+                        docs.push(path_str);
+                    }
+                }
+            }
+        }
+    }
+
+    docs.sort();
+    debug!(count = docs.len(), "Found doc files");
+    docs
 }

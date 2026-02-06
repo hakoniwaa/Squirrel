@@ -10,7 +10,7 @@ High-level system boundaries and data flow.
 | **Local-First** | All data stored locally, no cloud required |
 | **No AI in Squirrel** | Squirrel has zero LLM calls; all intelligence from CLI |
 | **Minimal** | 2 MCP tools, git hooks, SQLite. Nothing more. |
-| **Doc Aware** | Git hooks track doc debt, CLI fixes docs |
+| **Doc Aware** | Pre-push hook shows changes for AI to review docs |
 
 ## System Overview
 
@@ -57,14 +57,13 @@ Single Rust binary. No persistent daemon. Started on-demand by CLI tools (MCP) o
 |--------|---------|
 | MCP Server | Serves `store_memory` + `get_memory` to CLI tools (rmcp) |
 | CLI Handler | `sqrl init`, `sqrl goaway`, `sqrl status` (clap) |
-| Git Hooks | Doc debt detection (post-commit, pre-push) |
-| SQLite Storage | Memories + doc debt storage |
+| Git Hooks | Pre-push diff display for doc review |
+| SQLite Storage | Memory storage |
 
 **Owns:**
 - SQLite read/write
 - use_count tracking
 - MCP protocol handling
-- Doc debt tracking
 - Git hook installation
 
 **Never Contains:**
@@ -88,7 +87,7 @@ CLI tools (Claude Code, Cursor, etc.) are the intelligence layer.
 **CLI is responsible for:**
 - Deciding what to remember
 - Deciding when to store
-- Updating docs when debt is reported
+- Updating docs when pre-push hook shows changes
 - Reviewing/applying user preferences
 
 **Squirrel is NOT responsible for:**
@@ -103,8 +102,8 @@ CLI tools (Claude Code, Cursor, etc.) are the intelligence layer.
 
 | File | Location | Contains |
 |------|----------|----------|
-| Project Memory DB | `<repo>/.sqrl/memory.db` | All memories + doc debt |
-| Project Config | `<repo>/.sqrl/config.yaml` | Doc patterns, hook settings |
+| Project Memory DB | `<repo>/.sqrl/memory.db` | All memories |
+| Project Config | `<repo>/.sqrl/config.yaml` | Tools, docs, hook settings |
 | Skill File | `<repo>/.claude/skills/squirrel-session/SKILL.md` | Session start instructions |
 
 ---
@@ -181,19 +180,21 @@ CLI needs project context (user asks, or session start skill)
 
 ---
 
-### FLOW-004: Doc Debt Detection
+### FLOW-004: Doc Review (Pre-Push)
 
 ```
-1. User commits code
-2. Git post-commit hook calls: sqrl _internal docguard-record
-3. Auto-resolve: if docs were updated in this commit, resolve matching old debt
-4. Squirrel analyzes commit diff:
-   a. Config mappings (.sqrl/config.yaml doc_rules.mappings)
-   b. Reference patterns (code contains SCHEMA-001 → SCHEMAS.md)
-5. If code changed but related docs didn't:
-   - Record doc debt entry in SQLite
-6. CLI sees debt via CLAUDE.md instructions or sqrl status
+1. User/AI pushes code
+2. Git pre-push hook calls: sqrl _internal docguard-check
+3. Squirrel prints:
+   - Commits to push (count)
+   - Files changed (diff stats)
+   - Doc files in repo
+4. AI reads output, decides if docs need updating
+5. If yes: AI updates docs, commits, push continues
+6. If no: push continues
 ```
+
+Always informational, never blocks. AI makes the decision.
 
 ---
 
@@ -201,10 +202,8 @@ CLI needs project context (user asks, or session start skill)
 
 ```
 1. sqrl init detects .git/ exists
-2. Installs hooks to .git/hooks/:
-   - post-commit: sqrl _internal docguard-record
-   - pre-push: sqrl _internal docguard-check
-3. Hooks are self-contained (no daemon required)
+2. Installs pre-push hook to .git/hooks/pre-push
+3. Hook is self-contained (no daemon required)
 ```
 
 ---
@@ -216,12 +215,11 @@ CLI needs project context (user asks, or session start skill)
 | `sqrl` | Show help |
 | `sqrl init` | Initialize project (.sqrl/, hooks, skill, MCP registration) |
 | `sqrl goaway` | Remove all Squirrel data (including MCP unregistration) |
-| `sqrl status` | Show project status including doc debt |
+| `sqrl status` | Show project status |
 | `sqrl mcp-serve` | Start MCP server (called by CLI tool config) |
 
 **Hidden internal commands** (called by hooks):
-- `sqrl _internal docguard-record` - Record doc debt after commit
-- `sqrl _internal docguard-check` - Check doc debt before push
+- `sqrl _internal docguard-check` - Show diff summary before push
 
 ---
 
@@ -230,16 +228,15 @@ CLI needs project context (user asks, or session start skill)
 ```
 <repo>/
 ├── .sqrl/
-│   ├── config.yaml          # Tools, doc mappings, hook settings
-│   └── memory.db            # SQLite (memories + doc debt)
+│   ├── config.yaml          # Tools, docs, hook settings
+│   └── memory.db            # SQLite (memories)
 ├── .claude/
 │   ├── CLAUDE.md            # Memory Protocol triggers (appended)
 │   └── skills/
 │       └── squirrel-session/
 │           └── SKILL.md     # Session start skill
 └── .git/hooks/
-    ├── post-commit          # Doc debt recording
-    └── pre-push             # Doc debt check (optional block)
+    └── pre-push             # Diff summary for doc review
 ```
 
 Also registers MCP server with enabled AI tools (e.g., `claude mcp add squirrel`).

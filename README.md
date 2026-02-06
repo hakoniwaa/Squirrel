@@ -36,15 +36,17 @@ Memories are behavioral corrections — things that change how the AI acts next 
 
 **Don't store:** research in progress, general knowledge, conversation context, anything that doesn't change AI behavior.
 
-## Doc Debt Detection
+## Doc Review
 
-Git hooks track when code changes but related docs don't.
+Pre-push hook shows what changed so AI can review docs.
 
 ```
-You commit .rs code → post-commit hook checks mappings
-    → specs/ARCHITECTURE.md not updated? → doc debt recorded
-You push → pre-push hook warns about pending debt
+You push → pre-push hook shows diff summary + doc file list
+    → AI reads output, decides if docs need updating
+    → AI updates docs if needed, then push succeeds
 ```
+
+No static mappings. No complex rules. The AI understands the code and makes the call.
 
 ## Quick Start
 

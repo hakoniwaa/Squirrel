@@ -39,7 +39,7 @@ pub fn run() -> Result<(), Error> {
 
     // Install git hooks if git exists
     if config.hooks.auto_install && hooks::has_git(&project_root) {
-        if let Err(e) = hooks::install_hooks(&project_root, config.hooks.pre_push_block) {
+        if let Err(e) = hooks::install_hooks(&project_root, false) {
             warn!(error = %e, "Failed to install git hooks");
         } else {
             println!("Git hooks installed.");
@@ -73,15 +73,14 @@ fn create_skill_file(project_root: &Path) -> Result<(), Error> {
 
     let skill_content = r#"---
 name: squirrel-session
-description: Load user preferences and project context from Squirrel memory at session start. Use when starting a new coding session.
+description: Load behavioral corrections from Squirrel memory at session start. Use when starting a new coding session.
 user-invocable: false
 ---
 
-At the start of this session, load context from Squirrel:
+At the start of this session, load corrections from Squirrel:
 
-1. Call `squirrel_get_memory` with type "preference" to get user preferences.
-2. Apply these preferences throughout the session.
-3. If doc debt exists (check via `sqrl status` output in project), note which docs may need updates.
+1. Call `squirrel_get_memory` to get all behavioral corrections.
+2. Apply these corrections throughout the session.
 "#;
 
     let skill_path = skill_dir.join("SKILL.md");

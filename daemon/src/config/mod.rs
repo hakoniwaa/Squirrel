@@ -16,13 +16,9 @@ pub struct Config {
     #[serde(default)]
     pub tools: ToolsConfig,
 
-    /// Documentation indexing settings.
+    /// Documentation file settings.
     #[serde(default)]
     pub docs: DocsConfig,
-
-    /// Doc debt detection rules.
-    #[serde(default)]
-    pub doc_rules: DocRulesConfig,
 
     /// Git hooks behavior.
     #[serde(default)]
@@ -44,10 +40,10 @@ pub struct ToolsConfig {
     pub codex: bool,
 }
 
-/// Documentation indexing settings.
+/// Documentation file settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DocsConfig {
-    /// File extensions to index.
+    /// File extensions considered documentation.
     #[serde(default = "default_extensions")]
     pub extensions: Vec<String>,
 
@@ -60,42 +56,12 @@ pub struct DocsConfig {
     pub exclude_paths: Vec<String>,
 }
 
-/// Doc debt detection rules.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DocRulesConfig {
-    /// Custom mappings: code pattern -> doc file.
-    #[serde(default)]
-    pub mappings: Vec<CodeDocMapping>,
-
-    /// Reference patterns to detect.
-    #[serde(default)]
-    pub reference_patterns: Vec<ReferencePattern>,
-}
-
-/// Code to doc mapping rule.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CodeDocMapping {
-    pub code: String,
-    pub doc: String,
-}
-
-/// Reference pattern rule.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReferencePattern {
-    pub pattern: String,
-    pub doc: String,
-}
-
 /// Git hooks behavior.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HooksConfig {
     /// Auto-install hooks when git detected.
     #[serde(default = "default_true")]
     pub auto_install: bool,
-
-    /// Block push if doc debt exists (strict mode).
-    #[serde(default)]
-    pub pre_push_block: bool,
 }
 
 /// Internal state (managed by sqrl, not user).
@@ -157,47 +123,9 @@ impl Default for DocsConfig {
     }
 }
 
-impl Default for DocRulesConfig {
-    fn default() -> Self {
-        Self {
-            mappings: vec![
-                CodeDocMapping {
-                    code: "daemon/src/**/*.rs".to_string(),
-                    doc: "specs/ARCHITECTURE.md".to_string(),
-                },
-                CodeDocMapping {
-                    code: "daemon/src/mcp/**/*.rs".to_string(),
-                    doc: "specs/INTERFACES.md".to_string(),
-                },
-                CodeDocMapping {
-                    code: "daemon/src/storage/**/*.rs".to_string(),
-                    doc: "specs/SCHEMAS.md".to_string(),
-                },
-            ],
-            reference_patterns: vec![
-                ReferencePattern {
-                    pattern: r"SCHEMA-\d+".to_string(),
-                    doc: "specs/SCHEMAS.md".to_string(),
-                },
-                ReferencePattern {
-                    pattern: r"MCP-\d+".to_string(),
-                    doc: "specs/INTERFACES.md".to_string(),
-                },
-                ReferencePattern {
-                    pattern: r"ADR-\d+".to_string(),
-                    doc: "specs/DECISIONS.md".to_string(),
-                },
-            ],
-        }
-    }
-}
-
 impl Default for HooksConfig {
     fn default() -> Self {
-        Self {
-            auto_install: true,
-            pre_push_block: false,
-        }
+        Self { auto_install: true }
     }
 }
 
@@ -206,7 +134,6 @@ impl Default for Config {
         Self {
             tools: ToolsConfig::default(),
             docs: DocsConfig::default(),
-            doc_rules: DocRulesConfig::default(),
             hooks: HooksConfig::default(),
             internal: Some(InternalConfig {
                 initialized_at: chrono::Utc::now().to_rfc3339(),
@@ -239,10 +166,7 @@ impl Config {
         let content = serde_yaml::to_string(self).map_err(|e| Error::ConfigParse(e.to_string()))?;
 
         // Add header comment
-        let with_header = format!(
-            "# Squirrel project configuration\n# Edit with 'sqrl config' or modify directly\n\n{}",
-            content
-        );
+        let with_header = format!("# Squirrel project configuration\n\n{}", content);
 
         fs::write(&config_path, with_header)?;
         Ok(())

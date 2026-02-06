@@ -33,29 +33,9 @@ pub fn run() -> Result<i32, Error> {
         println!("  Memories: 0");
     }
 
-    // Doc debt
-    let debts = storage::get_unresolved_doc_debt(&project_root).unwrap_or_default();
-    if debts.is_empty() {
-        println!("  Doc debt: none");
-    } else {
-        println!("  Doc debt: {} pending", debts.len());
-    }
-
     // Last activity
     if let Some(last_activity) = get_last_activity(&sqrl_dir) {
         println!("  Last activity: {}", last_activity);
-    }
-
-    // Show doc debt details if any
-    if !debts.is_empty() {
-        println!();
-        println!("Doc Debt:");
-        for debt in &debts {
-            let short_sha = &debt.commit_sha[..7.min(debt.commit_sha.len())];
-            let msg = debt.commit_message.as_deref().unwrap_or("(no message)");
-            println!("  {} {}", short_sha, msg);
-            println!("    Expected: {}", debt.expected_docs.join(", "));
-        }
     }
 
     Ok(0)

@@ -130,9 +130,9 @@ sqrl init
 **Actions:**
 1. Create `.sqrl/` directory
 2. Create `.sqrl/memory.db` (empty SQLite)
-3. Write `.sqrl/config.yaml` with defaults (including seeded doc mappings)
+3. Write `.sqrl/config.yaml` with defaults
 4. Add `.sqrl/` to `.gitignore`
-5. If `.git/` exists: install git hooks
+5. If `.git/` exists: install pre-push hook
 6. Create `.claude/skills/squirrel-session/SKILL.md`
 7. Add Memory Protocol triggers to `.claude/CLAUDE.md`
 8. Register MCP server with enabled AI tools (e.g., `claude mcp add`)
@@ -158,7 +158,7 @@ sqrl goaway -f       # Skip confirmation (short form)
 **Actions:**
 1. Show what will be removed
 2. Prompt for confirmation (unless --force)
-3. Remove git hooks (post-commit, pre-push)
+3. Remove git hooks (pre-push)
 4. Unregister MCP server from enabled AI tools (e.g., `claude mcp remove`)
 5. Remove `.claude/skills/squirrel-session/`
 6. Remove Memory Protocol triggers from `.claude/CLAUDE.md`
@@ -183,8 +183,7 @@ Squirrel Status
   Project: /home/user/myproject
   Initialized: yes
   Memories: 12 total (5 preference, 4 project, 2 decision, 1 solution)
-  Doc debt: 2 pending
-  Last stored: 2 hours ago
+  Last activity: 2 hours ago
 ```
 
 **Exit codes:**
@@ -213,29 +212,36 @@ claude mcp add squirrel -- sqrl mcp-serve
 
 ---
 
-### CLI-006: sqrl _internal docguard-record
-
-Hidden. Called by post-commit git hook.
-
-**Usage:** `sqrl _internal docguard-record`
-
-**Action:**
-1. Get latest commit diff
-2. Check code files changed against doc debt rules
-3. If debt detected, record in SQLite
-
----
-
-### CLI-007: sqrl _internal docguard-check
+### CLI-006: sqrl _internal docguard-check
 
 Hidden. Called by pre-push git hook.
 
 **Usage:** `sqrl _internal docguard-check`
 
-**Action:**
-1. Check if unresolved doc debt exists
-2. If `pre_push_block: true` in config, exit non-zero to block push
-3. Otherwise, print warning and exit 0
+**Action:** Prints diff summary and doc file list so AI can decide if docs need updating.
+
+**Output example:**
+```
+═══════════════════════════════════════════════════════════════
+ Squirrel: Review changes before push
+═══════════════════════════════════════════════════════════════
+
+ Commits to push: 3
+
+ Files changed:
+   daemon/src/mcp/mod.rs     | 45 ++++---
+   daemon/src/storage/mod.rs | 23 ++--
+
+ Doc files in repo:
+   specs/ARCHITECTURE.md
+   specs/INTERFACES.md
+   README.md
+
+ → Review if any docs need updating based on these changes.
+═══════════════════════════════════════════════════════════════
+```
+
+Always exits 0 (informational only, never blocks).
 
 ---
 
@@ -243,22 +249,21 @@ Hidden. Called by pre-push git hook.
 
 ### SKILL-001: squirrel-session
 
-Auto-triggers at session start. Shows user preferences.
+Auto-triggers at session start. Loads behavioral corrections.
 
 **File:** `.claude/skills/squirrel-session/SKILL.md`
 
 ```markdown
 ---
 name: squirrel-session
-description: Load user preferences and project context from Squirrel memory at session start. Use when starting a new coding session.
+description: Load behavioral corrections from Squirrel memory at session start. Use when starting a new coding session.
 user-invocable: false
 ---
 
-At the start of this session, load context from Squirrel:
+At the start of this session, load corrections from Squirrel:
 
-1. Call `squirrel_get_memory` with type "preference" to get user preferences.
-2. Apply these preferences throughout the session.
-3. If doc debt exists (check via `sqrl status` output in project), note which docs may need updates.
+1. Call `squirrel_get_memory` to get all behavioral corrections.
+2. Apply these corrections throughout the session.
 ```
 
 ---
@@ -314,33 +319,15 @@ tools:
   cursor: false
   codex: false
 
-# Documentation indexing settings
+# Documentation file settings
 docs:
   extensions: [md, mdc, txt, rst]
   include_paths: [specs/, docs/, .claude/, .cursor/]
   exclude_paths: [node_modules/, target/, .git/, vendor/, dist/]
 
-# Doc debt detection rules (seeded by sqrl init)
-doc_rules:
-  mappings:
-    - code: "daemon/src/**/*.rs"
-      doc: "specs/ARCHITECTURE.md"
-    - code: "daemon/src/mcp/**/*.rs"
-      doc: "specs/INTERFACES.md"
-    - code: "daemon/src/storage/**/*.rs"
-      doc: "specs/SCHEMAS.md"
-  reference_patterns:
-    - pattern: "SCHEMA-\\d+"
-      doc: "specs/SCHEMAS.md"
-    - pattern: "MCP-\\d+"
-      doc: "specs/INTERFACES.md"
-    - pattern: "ADR-\\d+"
-      doc: "specs/DECISIONS.md"
-
 # Git hooks behavior
 hooks:
   auto_install: true
-  pre_push_block: false
 ```
 
 ---

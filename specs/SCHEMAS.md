@@ -1,6 +1,6 @@
 # Squirrel Schemas
 
-Database schema for project memories and doc debt. Single database per project.
+Database schema for project memories. Single database per project.
 
 ---
 
@@ -8,7 +8,7 @@ Database schema for project memories and doc debt. Single database per project.
 
 | Database | Location | Purpose |
 |----------|----------|---------|
-| Project DB | `<repo>/.sqrl/memory.db` | Memories + doc debt |
+| Project DB | `<repo>/.sqrl/memory.db` | Memories (behavioral corrections) |
 
 ---
 
@@ -20,7 +20,7 @@ All memories stored in a single table with type field.
 CREATE TABLE memories (
   id           TEXT PRIMARY KEY,          -- UUID
   memory_type  TEXT NOT NULL,             -- 'preference' | 'project' | 'decision' | 'solution'
-  content      TEXT NOT NULL,             -- Memory content (1-2 sentences)
+  content      TEXT NOT NULL,             -- Actionable instruction (1-2 sentences)
   tags         TEXT DEFAULT '[]',         -- JSON array of tags
   use_count    INTEGER DEFAULT 1,         -- Times stored/reinforced
   created_at   TEXT NOT NULL,             -- ISO 8601
@@ -56,37 +56,6 @@ Memories are behavioral corrections — things that change how the AI acts next 
 
 ---
 
-## SCHEMA-002: doc_debt
-
-Tracked documentation debt per commit.
-
-```sql
-CREATE TABLE doc_debt (
-  id              TEXT PRIMARY KEY,         -- UUID
-  commit_sha      TEXT NOT NULL,            -- Git commit SHA
-  commit_message  TEXT,                     -- First line of commit message
-  code_files      TEXT NOT NULL,            -- JSON array of changed code files
-  expected_docs   TEXT NOT NULL,            -- JSON array of docs that should update
-  detection_rule  TEXT NOT NULL,            -- 'config' | 'reference' | 'pattern'
-  resolved        INTEGER DEFAULT 0,        -- 1 if debt resolved
-  resolved_at     TEXT,                     -- ISO 8601 when resolved
-  created_at      TEXT NOT NULL             -- ISO 8601
-);
-
-CREATE INDEX idx_doc_debt_commit ON doc_debt(commit_sha);
-CREATE INDEX idx_doc_debt_resolved ON doc_debt(resolved);
-```
-
-### Detection Rules
-
-| Rule | Priority | Description |
-|------|----------|-------------|
-| config | 1 | User-defined mapping in .sqrl/config.yaml |
-| reference | 2 | Code contains spec ID (e.g., SCHEMA-001) |
-| pattern | 3 | File pattern match (e.g., *.rs → ARCHITECTURE.md) |
-
----
-
 ## use_count Semantics
 
 The `use_count` field tracks how many times a memory has been stored or reinforced.
@@ -110,20 +79,5 @@ The `use_count` field tracks how many times a memory has been stored or reinforc
 | SCHEMA-003: categories | Removed | Tags replace categories |
 | SCHEMA-004: extraction_log | Removed | No extraction pipeline |
 | SCHEMA-005: docs_index | Removed | No LLM doc summaries |
+| SCHEMA-002: doc_debt | Removed | AI decides doc updates, no tracking needed |
 | Team schemas | Deferred | Future cloud version |
-
----
-
-## Migration Notes
-
-### From Old Schema
-
-If migrating from the previous multi-table schema:
-
-| Old Table | Action |
-|-----------|--------|
-| `user_styles` | Move to `memories` with type "preference" |
-| `project_memories` | Move to `memories` with type "project" |
-| `categories` | Convert category to tags |
-| `extraction_log` | Drop |
-| `docs_index` | Drop |

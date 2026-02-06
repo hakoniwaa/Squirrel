@@ -51,11 +51,7 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum InternalCommands {
-    /// Record doc debt after commit (post-commit hook)
-    #[command(name = "docguard-record")]
-    DocguardRecord,
-
-    /// Check doc debt before push (pre-push hook)
+    /// Show diff summary before push (pre-push hook)
     #[command(name = "docguard-check")]
     DocguardCheck,
 }
@@ -91,9 +87,6 @@ fn main() -> Result<(), Error> {
             mcp::run()?;
         }
         Some(Commands::Internal { cmd }) => match cmd {
-            InternalCommands::DocguardRecord => {
-                cli::internal::docguard_record()?;
-            }
             InternalCommands::DocguardCheck => {
                 if !cli::internal::docguard_check()? {
                     std::process::exit(1);

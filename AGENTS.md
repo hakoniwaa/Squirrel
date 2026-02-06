@@ -77,17 +77,9 @@ devenv shell
 - Only change what's necessary (DR5)
 - Write tests for new features (DR4)
 
-## Doc Debt Awareness
+## Doc Review
 
-Squirrel auto-installs git hooks that track doc debt. After each commit, check `sqrl status` to see if docs need updates.
-
-| Files Changed | Check These Docs |
-|---------------|------------------|
-| `*.rs` (Rust) | `specs/ARCHITECTURE.md`, `specs/INTERFACES.md`, `specs/SCHEMAS.md` |
-| `specs/*.md` | Related code that implements the spec |
-| `*.toml`, `*.nix` | `specs/DECISIONS.md` (if config change is significant) |
-
-When doc debt is detected, update the related docs before pushing.
+When you push, Squirrel's pre-push hook shows you what files changed and lists doc files in the repo. Review the changes and decide if any docs need updating. Update them before the push completes.
 
 <!-- START Squirrel Memory Protocol -->
 ## Squirrel Memory Protocol

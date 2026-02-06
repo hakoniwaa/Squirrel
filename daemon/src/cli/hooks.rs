@@ -8,31 +8,13 @@ use tracing::info;
 
 use crate::error::Error;
 
-/// Post-commit hook script content.
-const POST_COMMIT_HOOK: &str = r#"#!/bin/sh
-# Squirrel doc debt tracking (auto-installed)
-# Records which files changed for doc debt detection
-
-sqrl _internal docguard-record "$@" 2>/dev/null || true
-"#;
-
 /// Pre-push hook script content.
+/// Shows diff summary for AI to review before push.
 const PRE_PUSH_HOOK: &str = r#"#!/bin/sh
-# Squirrel doc debt check (auto-installed)
-# Warns if there's unresolved doc debt before push
+# Squirrel: shows changes for doc review before push
+# AI reads this output and decides if docs need updating
 
-sqrl _internal docguard-check "$@" 2>/dev/null || true
-"#;
-
-/// Pre-push hook with blocking enabled.
-const PRE_PUSH_HOOK_BLOCKING: &str = r#"#!/bin/sh
-# Squirrel doc debt check (auto-installed, blocking mode)
-# Blocks push if there's unresolved doc debt
-
-if ! sqrl _internal docguard-check "$@" 2>/dev/null; then
-    echo "Push blocked: unresolved doc debt. Run 'sqrl status' to see details."
-    exit 1
-fi
+sqrl _internal docguard-check 2>/dev/null || true
 "#;
 
 /// Check if git is initialized in the project.
@@ -44,20 +26,20 @@ pub fn has_git(project_root: &Path) -> bool {
 #[allow(dead_code)]
 pub fn hooks_installed(project_root: &Path) -> bool {
     let hooks_dir = project_root.join(".git").join("hooks");
-    let post_commit = hooks_dir.join("post-commit");
+    let pre_push = hooks_dir.join("pre-push");
 
-    if !post_commit.exists() {
+    if !pre_push.exists() {
         return false;
     }
 
     // Check if it's our hook (contains "Squirrel")
-    fs::read_to_string(&post_commit)
+    fs::read_to_string(&pre_push)
         .map(|content| content.contains("Squirrel"))
         .unwrap_or(false)
 }
 
 /// Install Squirrel git hooks.
-pub fn install_hooks(project_root: &Path, pre_push_block: bool) -> Result<(), Error> {
+pub fn install_hooks(project_root: &Path, _pre_push_block: bool) -> Result<(), Error> {
     let git_dir = project_root.join(".git");
     if !git_dir.exists() {
         return Ok(()); // No git, nothing to do
@@ -66,19 +48,9 @@ pub fn install_hooks(project_root: &Path, pre_push_block: bool) -> Result<(), Er
     let hooks_dir = git_dir.join("hooks");
     fs::create_dir_all(&hooks_dir)?;
 
-    // Install post-commit hook
-    let post_commit_path = hooks_dir.join("post-commit");
-    install_hook(&post_commit_path, POST_COMMIT_HOOK)?;
-    info!("Installed post-commit hook");
-
-    // Install pre-push hook
+    // Install pre-push hook only
     let pre_push_path = hooks_dir.join("pre-push");
-    let pre_push_content = if pre_push_block {
-        PRE_PUSH_HOOK_BLOCKING
-    } else {
-        PRE_PUSH_HOOK
-    };
-    install_hook(&pre_push_path, pre_push_content)?;
+    install_hook(&pre_push_path, PRE_PUSH_HOOK)?;
     info!("Installed pre-push hook");
 
     Ok(())
@@ -117,25 +89,43 @@ pub fn uninstall_hooks(project_root: &Path) -> Result<(), Error> {
         return Ok(());
     }
 
-    for hook_name in &["post-commit", "pre-push"] {
-        let hook_path = hooks_dir.join(hook_name);
-        if hook_path.exists() {
-            let content = fs::read_to_string(&hook_path)?;
-            if content.contains("Squirrel") {
-                // Remove our section or the entire file
-                let cleaned = remove_squirrel_section(&content);
-                // Check if only shebangs and whitespace remain
-                let meaningful_content = cleaned
-                    .lines()
-                    .filter(|line| !line.trim().is_empty() && !line.starts_with("#!"))
-                    .count();
-                if meaningful_content == 0 {
-                    fs::remove_file(&hook_path)?;
-                } else {
-                    fs::write(&hook_path, cleaned)?;
-                }
-                info!(hook = hook_name, "Removed Squirrel hook");
+    // Only pre-push now
+    let hook_path = hooks_dir.join("pre-push");
+    if hook_path.exists() {
+        let content = fs::read_to_string(&hook_path)?;
+        if content.contains("Squirrel") {
+            // Remove our section or the entire file
+            let cleaned = remove_squirrel_section(&content);
+            // Check if only shebangs and whitespace remain
+            let meaningful_content = cleaned
+                .lines()
+                .filter(|line| !line.trim().is_empty() && !line.starts_with("#!"))
+                .count();
+            if meaningful_content == 0 {
+                fs::remove_file(&hook_path)?;
+            } else {
+                fs::write(&hook_path, cleaned)?;
             }
+            info!("Removed Squirrel pre-push hook");
+        }
+    }
+
+    // Also clean up old post-commit hook if it exists
+    let post_commit_path = hooks_dir.join("post-commit");
+    if post_commit_path.exists() {
+        let content = fs::read_to_string(&post_commit_path)?;
+        if content.contains("Squirrel") {
+            let cleaned = remove_squirrel_section(&content);
+            let meaningful_content = cleaned
+                .lines()
+                .filter(|line| !line.trim().is_empty() && !line.starts_with("#!"))
+                .count();
+            if meaningful_content == 0 {
+                fs::remove_file(&post_commit_path)?;
+            } else {
+                fs::write(&post_commit_path, cleaned)?;
+            }
+            info!("Removed old Squirrel post-commit hook");
         }
     }
 
@@ -147,9 +137,7 @@ fn remove_squirrel_section(content: &str) -> String {
     content
         .lines()
         .filter(|line| {
-            !line.contains("Squirrel")
-                && !line.contains("sqrl _internal")
-                && !line.contains("doc debt")
+            !line.contains("Squirrel") && !line.contains("sqrl _internal") && !line.contains("doc")
         })
         .collect::<Vec<_>>()
         .join("\n")
