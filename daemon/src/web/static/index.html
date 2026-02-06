@@ -4,128 +4,43 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Squirrel Config</title>
-  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-
-    :root {
-      --bg: #fff;
-      --fg: #000;
-      --border: #000;
-      --muted: #666;
-      --hover: #f5f5f5;
-    }
-
-    body {
-      font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, Consolas, monospace;
-      font-size: 14px;
-      line-height: 1.5;
-      background: var(--bg);
-      color: var(--fg);
-      max-width: 900px;
-      margin: 0 auto;
-      padding: 2rem;
-    }
-
+    :root { --bg: #fff; --fg: #000; --border: #000; --muted: #666; --hover: #f5f5f5; }
+    body { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace; font-size: 14px; line-height: 1.5; background: var(--bg); color: var(--fg); max-width: 900px; margin: 0 auto; padding: 2rem; }
     h1 { font-size: 1.5rem; margin-bottom: 2rem; font-weight: 600; }
     h2 { font-size: 1.1rem; margin: 2rem 0 1rem; font-weight: 600; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
     h3 { font-size: 1rem; margin: 1.5rem 0 0.5rem; font-weight: 500; }
-
-    .tabs {
-      display: flex;
-      gap: 0;
-      border-bottom: 1px solid var(--border);
-      margin-bottom: 2rem;
-    }
-
-    .tab {
-      padding: 0.75rem 1.5rem;
-      cursor: pointer;
-      border: 1px solid transparent;
-      border-bottom: none;
-      background: none;
-      font-family: inherit;
-      font-size: inherit;
-    }
-
+    .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 2rem; }
+    .tab { padding: 0.75rem 1.5rem; cursor: pointer; border: 1px solid transparent; border-bottom: none; background: none; font-family: inherit; font-size: inherit; }
     .tab:hover { background: var(--hover); }
     .tab.active { border-color: var(--border); background: var(--bg); margin-bottom: -1px; }
-
     .panel { display: none; }
     .panel.active { display: block; }
-
     label { display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0; cursor: pointer; }
     label:hover { background: var(--hover); }
-
-    input[type="checkbox"] {
-      width: 1.25rem;
-      height: 1.25rem;
-      accent-color: var(--fg);
-    }
-
-    input[type="text"], input[type="number"], textarea {
-      width: 100%;
-      padding: 0.5rem;
-      border: 1px solid var(--border);
-      font-family: inherit;
-      font-size: inherit;
-      background: var(--bg);
-    }
-
-    textarea { min-height: 100px; resize: vertical; }
-
-    button {
-      padding: 0.5rem 1rem;
-      border: 1px solid var(--border);
-      background: var(--bg);
-      cursor: pointer;
-      font-family: inherit;
-      font-size: inherit;
-    }
-
+    input[type="checkbox"] { width: 1.25rem; height: 1.25rem; accent-color: var(--fg); }
+    input[type="text"], input[type="file"], textarea, select { width: 100%; padding: 0.5rem; border: 1px solid var(--border); font-family: inherit; font-size: inherit; background: var(--bg); }
+    textarea { min-height: 80px; resize: vertical; }
+    button { padding: 0.5rem 1rem; border: 1px solid var(--border); background: var(--bg); cursor: pointer; font-family: inherit; font-size: inherit; }
     button:hover { background: var(--fg); color: var(--bg); }
     button.danger:hover { background: #c00; border-color: #c00; }
-
-    .btn-row { display: flex; gap: 0.5rem; margin-top: 1rem; }
-
     table { width: 100%; border-collapse: collapse; }
     th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid var(--border); }
     th { font-weight: 600; }
     tr:hover { background: var(--hover); }
-
     .muted { color: var(--muted); }
     .tag { display: inline-block; padding: 0.125rem 0.5rem; border: 1px solid var(--border); margin: 0.125rem; font-size: 0.85rem; }
-
-    .card {
-      border: 1px solid var(--border);
-      padding: 1rem;
-      margin-bottom: 1rem;
-    }
-
-    .card-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 0.5rem;
-    }
-
+    .card { border: 1px solid var(--border); padding: 1rem; margin-bottom: 1rem; }
+    .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
     .card-title { font-weight: 600; }
-
     .form-group { margin-bottom: 1rem; }
-    .form-group label { display: block; margin-bottom: 0.25rem; font-weight: 500; }
-
+    .form-group > label { display: block; margin-bottom: 0.25rem; font-weight: 500; padding: 0; }
+    .form-group > label:hover { background: none; }
     .status { padding: 0.5rem; margin: 1rem 0; }
     .status.success { background: #e8f5e9; border: 1px solid #4caf50; }
     .status.error { background: #ffebee; border: 1px solid #f44336; }
-
-    #project-select {
-      width: 100%;
-      padding: 0.5rem;
-      border: 1px solid var(--border);
-      font-family: inherit;
-      font-size: inherit;
-      margin-bottom: 1rem;
-    }
+    .mcp-item { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0; }
   </style>
 </head>
 <body>
@@ -134,113 +49,104 @@
   <div class="tabs">
     <button class="tab active" onclick="showPanel('tools')">Tools</button>
     <button class="tab" onclick="showPanel('mcps')">MCPs</button>
-    <button class="tab" onclick="showPanel('memories')">Memories</button>
+    <button class="tab" onclick="showPanel('preferences')">Preferences</button>
+    <button class="tab" onclick="showPanel('project')">Project</button>
   </div>
 
   <!-- Tools Panel -->
   <div id="tools" class="panel active">
-    <p class="muted">Select which CLI tools Squirrel will configure when you run <code>sqrl init</code> or <code>sqrl apply</code>.</p>
-
+    <p class="muted">Select which CLI tools to configure with <code>sqrl apply</code>.</p>
     <h3>Enabled Tools</h3>
     <div id="tools-list">
-      <label><input type="checkbox" id="tool-claude-code" checked onchange="saveTools()"> Claude Code</label>
-      <label><input type="checkbox" id="tool-git" checked onchange="saveTools()"> Git (hooks)</label>
-      <label><input type="checkbox" id="tool-cursor" onchange="saveTools()"> Cursor <span class="muted">(coming soon)</span></label>
-      <label><input type="checkbox" id="tool-codex" onchange="saveTools()"> Codex <span class="muted">(coming soon)</span></label>
+      <label><input type="checkbox" id="tool-claude-code" checked onchange="saveConfig()"> Claude Code</label>
+      <label><input type="checkbox" id="tool-git" checked onchange="saveConfig()"> Git (hooks)</label>
     </div>
-
     <div id="tools-status"></div>
   </div>
 
   <!-- MCPs Panel -->
   <div id="mcps" class="panel">
-    <p class="muted">Manage MCP server configurations. These get applied to projects via <code>sqrl apply</code>.</p>
+    <p class="muted">Upload an MCP config file (e.g., <code>.mcp.json</code>) and select which MCPs to enable.</p>
 
-    <h3>MCP Configs</h3>
-    <div id="mcps-list"></div>
-
-    <h3>Add New MCP</h3>
-    <div class="card">
-      <div class="form-group">
-        <label>Name</label>
-        <input type="text" id="mcp-name" placeholder="my-mcp">
-      </div>
-      <div class="form-group">
-        <label>Command</label>
-        <input type="text" id="mcp-command" placeholder="/path/to/mcp-server">
-      </div>
-      <div class="form-group">
-        <label>Arguments (comma-separated)</label>
-        <input type="text" id="mcp-args" placeholder="serve, --port, 8080">
-      </div>
-      <div class="form-group">
-        <label>Scope</label>
-        <select id="mcp-scope">
-          <option value="project">Project</option>
-          <option value="user">User</option>
-        </select>
-      </div>
-      <button onclick="addMcp()">Add MCP</button>
+    <h3>Upload MCP Config</h3>
+    <div class="form-group">
+      <input type="file" id="mcp-file" accept=".json" onchange="uploadMcpFile()">
     </div>
+
+    <h3>Available MCPs</h3>
+    <div id="mcps-list"><p class="muted">No MCPs loaded. Upload a config file.</p></div>
 
     <div id="mcps-status"></div>
   </div>
 
-  <!-- Memories Panel -->
-  <div id="memories" class="panel">
-    <p class="muted">View and edit memories for a project.</p>
+  <!-- Preferences Panel (Global) -->
+  <div id="preferences" class="panel">
+    <p class="muted">Global preferences apply to all projects.</p>
 
-    <div class="form-group">
-      <label>Project Path</label>
-      <input type="text" id="project-path" placeholder="/path/to/project" onchange="loadMemories()">
-    </div>
+    <div id="preferences-list"></div>
 
-    <div id="memories-list"></div>
-
-    <h3>Add Memory</h3>
+    <h3>Add Preference</h3>
     <div class="card">
       <div class="form-group">
-        <label>Type</label>
-        <select id="memory-type">
-          <option value="preference">Preference</option>
-          <option value="project">Project</option>
-          <option value="decision">Decision</option>
-          <option value="solution">Solution</option>
-        </select>
-      </div>
-      <div class="form-group">
         <label>Content</label>
-        <textarea id="memory-content" placeholder="An actionable instruction..."></textarea>
+        <textarea id="pref-content" placeholder="Don't use emojis in commits"></textarea>
       </div>
       <div class="form-group">
         <label>Tags (comma-separated)</label>
-        <input type="text" id="memory-tags" placeholder="backend, rust">
+        <input type="text" id="pref-tags" placeholder="style, commits">
       </div>
-      <button onclick="addMemory()">Add Memory</button>
+      <button onclick="addPreference()">Add Preference</button>
     </div>
 
-    <div id="memories-status"></div>
+    <div id="pref-status"></div>
+  </div>
+
+  <!-- Project Panel -->
+  <div id="project" class="panel">
+    <p class="muted">Project-specific memories. Enter the project path to load.</p>
+
+    <div class="form-group">
+      <label>Project Path</label>
+      <input type="text" id="project-path" placeholder="/path/to/project" onchange="loadProjectMemories()">
+    </div>
+
+    <div id="project-memories-list"></div>
+
+    <h3>Add Project Memory</h3>
+    <div class="card">
+      <div class="form-group">
+        <label>Content</label>
+        <textarea id="proj-content" placeholder="Use httpx not requests"></textarea>
+      </div>
+      <div class="form-group">
+        <label>Tags (comma-separated)</label>
+        <input type="text" id="proj-tags" placeholder="backend, http">
+      </div>
+      <button onclick="addProjectMemory()">Add Memory</button>
+    </div>
+
+    <div id="proj-status"></div>
   </div>
 
   <script>
-    // Tab switching
+    let mcpConfig = { mcpServers: {} };
+    let enabledMcps = [];
+
     function showPanel(id) {
       document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
       document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
       document.getElementById(id).classList.add('active');
       event.target.classList.add('active');
-
-      if (id === 'mcps') loadMcps();
+      if (id === 'preferences') loadPreferences();
     }
 
-    // Status display
     function showStatus(elementId, message, isError) {
       const el = document.getElementById(elementId);
       el.innerHTML = `<div class="status ${isError ? 'error' : 'success'}">${message}</div>`;
       setTimeout(() => el.innerHTML = '', 3000);
     }
 
-    // Tools
+    // Config
     async function loadConfig() {
       try {
         const res = await fetch('/api/config');
@@ -248,25 +154,22 @@
         if (json.success) {
           document.getElementById('tool-claude-code').checked = json.data.tools.claude_code;
           document.getElementById('tool-git').checked = json.data.tools.git;
-          document.getElementById('tool-cursor').checked = json.data.tools.cursor;
-          document.getElementById('tool-codex').checked = json.data.tools.codex;
+          enabledMcps = json.data.mcps || [];
         }
-      } catch (e) {
-        console.error(e);
-      }
+      } catch (e) { console.error(e); }
     }
 
-    async function saveTools() {
+    async function saveConfig() {
       const config = {
         tools: {
           claude_code: document.getElementById('tool-claude-code').checked,
           git: document.getElementById('tool-git').checked,
-          cursor: document.getElementById('tool-cursor').checked,
-          codex: document.getElementById('tool-codex').checked,
+          cursor: false,
+          codex: false,
         },
+        mcps: enabledMcps,
         ui: { port: 3333, open_browser: true }
       };
-
       try {
         const res = await fetch('/api/config', {
           method: 'POST',
@@ -275,151 +178,138 @@
         });
         const json = await res.json();
         showStatus('tools-status', json.success ? 'Saved' : json.error, !json.success);
-      } catch (e) {
-        showStatus('tools-status', e.message, true);
-      }
+      } catch (e) { showStatus('tools-status', e.message, true); }
     }
 
     // MCPs
-    async function loadMcps() {
-      try {
-        const res = await fetch('/api/mcps');
-        const json = await res.json();
-        if (json.success) {
-          const list = document.getElementById('mcps-list');
-          if (json.data.length === 0) {
-            list.innerHTML = '<p class="muted">No MCP configs yet.</p>';
-            return;
-          }
-          list.innerHTML = json.data.map(mcp => `
-            <div class="card">
-              <div class="card-header">
-                <span class="card-title">${mcp.name}</span>
-                <button class="danger" onclick="deleteMcp('${mcp.name}')">Delete</button>
-              </div>
-              <p><code>${mcp.command} ${mcp.args.join(' ')}</code></p>
-              <p class="muted">Scope: ${mcp.scope}</p>
-            </div>
-          `).join('');
+    function uploadMcpFile() {
+      const file = document.getElementById('mcp-file').files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          mcpConfig = JSON.parse(e.target.result);
+          renderMcps();
+          showStatus('mcps-status', 'MCP config loaded', false);
+        } catch (err) {
+          showStatus('mcps-status', 'Invalid JSON file', true);
         }
-      } catch (e) {
-        console.error(e);
-      }
+      };
+      reader.readAsText(file);
     }
 
-    async function addMcp() {
-      const mcp = {
-        name: document.getElementById('mcp-name').value,
-        command: document.getElementById('mcp-command').value,
-        args: document.getElementById('mcp-args').value.split(',').map(s => s.trim()).filter(s => s),
-        scope: document.getElementById('mcp-scope').value,
-        env: {}
-      };
-
-      if (!mcp.name || !mcp.command) {
-        showStatus('mcps-status', 'Name and command are required', true);
+    function renderMcps() {
+      const servers = mcpConfig.mcpServers || {};
+      const names = Object.keys(servers);
+      if (names.length === 0) {
+        document.getElementById('mcps-list').innerHTML = '<p class="muted">No MCPs in config file.</p>';
         return;
       }
+      document.getElementById('mcps-list').innerHTML = names.map(name => {
+        const checked = enabledMcps.includes(name) ? 'checked' : '';
+        const s = servers[name];
+        return `
+          <div class="mcp-item">
+            <input type="checkbox" id="mcp-${name}" ${checked} onchange="toggleMcp('${name}')">
+            <label for="mcp-${name}"><strong>${name}</strong> - <code>${s.command} ${(s.args || []).join(' ')}</code></label>
+          </div>
+        `;
+      }).join('');
+    }
 
+    function toggleMcp(name) {
+      const checked = document.getElementById('mcp-' + name).checked;
+      if (checked && !enabledMcps.includes(name)) {
+        enabledMcps.push(name);
+      } else if (!checked) {
+        enabledMcps = enabledMcps.filter(n => n !== name);
+      }
+      saveConfig();
+    }
+
+    // Preferences (global)
+    async function loadPreferences() {
       try {
-        const res = await fetch('/api/mcps', {
+        const res = await fetch('/api/preferences');
+        const json = await res.json();
+        const list = document.getElementById('preferences-list');
+        if (!json.success || json.data.length === 0) {
+          list.innerHTML = '<p class="muted">No global preferences yet.</p>';
+          return;
+        }
+        list.innerHTML = `<table><thead><tr><th>Content</th><th>Tags</th><th>Used</th><th></th></tr></thead><tbody>
+          ${json.data.map(m => `<tr>
+            <td>${m.content}</td>
+            <td>${m.tags.map(t => `<span class="tag">${t}</span>`).join('')}</td>
+            <td>${m.use_count}x</td>
+            <td><button class="danger" onclick="deletePreference('${m.id}')">Delete</button></td>
+          </tr>`).join('')}
+        </tbody></table>`;
+      } catch (e) { console.error(e); }
+    }
+
+    async function addPreference() {
+      const memory = {
+        content: document.getElementById('pref-content').value,
+        tags: document.getElementById('pref-tags').value.split(',').map(s => s.trim()).filter(s => s)
+      };
+      if (!memory.content) { showStatus('pref-status', 'Content required', true); return; }
+      try {
+        const res = await fetch('/api/preferences', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(mcp)
+          body: JSON.stringify(memory)
         });
         const json = await res.json();
         if (json.success) {
-          document.getElementById('mcp-name').value = '';
-          document.getElementById('mcp-command').value = '';
-          document.getElementById('mcp-args').value = '';
-          loadMcps();
-          showStatus('mcps-status', 'MCP added', false);
-        } else {
-          showStatus('mcps-status', json.error, true);
-        }
-      } catch (e) {
-        showStatus('mcps-status', e.message, true);
-      }
+          document.getElementById('pref-content').value = '';
+          document.getElementById('pref-tags').value = '';
+          loadPreferences();
+          showStatus('pref-status', 'Preference added', false);
+        } else { showStatus('pref-status', json.error, true); }
+      } catch (e) { showStatus('pref-status', e.message, true); }
     }
 
-    async function deleteMcp(name) {
-      if (!confirm(`Delete MCP "${name}"?`)) return;
-
+    async function deletePreference(id) {
+      if (!confirm('Delete this preference?')) return;
       try {
-        const res = await fetch(`/api/mcps/${name}`, { method: 'DELETE' });
+        const res = await fetch(`/api/preferences/${id}`, { method: 'DELETE' });
         const json = await res.json();
-        if (json.success) {
-          loadMcps();
-          showStatus('mcps-status', 'MCP deleted', false);
-        } else {
-          showStatus('mcps-status', json.error, true);
-        }
-      } catch (e) {
-        showStatus('mcps-status', e.message, true);
-      }
+        if (json.success) { loadPreferences(); showStatus('pref-status', 'Deleted', false); }
+        else { showStatus('pref-status', json.error, true); }
+      } catch (e) { showStatus('pref-status', e.message, true); }
     }
 
-    // Memories
-    async function loadMemories() {
+    // Project memories
+    async function loadProjectMemories() {
       const project = document.getElementById('project-path').value;
       if (!project) return;
-
       try {
         const res = await fetch(`/api/memories?project=${encodeURIComponent(project)}`);
         const json = await res.json();
-        const list = document.getElementById('memories-list');
-
-        if (!json.success) {
-          list.innerHTML = `<p class="muted">${json.error}</p>`;
-          return;
-        }
-
-        if (json.data.length === 0) {
-          list.innerHTML = '<p class="muted">No memories in this project.</p>';
-          return;
-        }
-
-        list.innerHTML = `
-          <table>
-            <thead>
-              <tr><th>Type</th><th>Content</th><th>Tags</th><th>Used</th><th></th></tr>
-            </thead>
-            <tbody>
-              ${json.data.map(m => `
-                <tr>
-                  <td>${m.memory_type}</td>
-                  <td>${m.content}</td>
-                  <td>${m.tags.map(t => `<span class="tag">${t}</span>`).join('')}</td>
-                  <td>${m.use_count}x</td>
-                  <td><button class="danger" onclick="deleteMemory('${m.id}')">Delete</button></td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        `;
-      } catch (e) {
-        console.error(e);
-      }
+        const list = document.getElementById('project-memories-list');
+        if (!json.success) { list.innerHTML = `<p class="muted">${json.error}</p>`; return; }
+        if (json.data.length === 0) { list.innerHTML = '<p class="muted">No project memories.</p>'; return; }
+        list.innerHTML = `<table><thead><tr><th>Content</th><th>Tags</th><th>Used</th><th></th></tr></thead><tbody>
+          ${json.data.map(m => `<tr>
+            <td>${m.content}</td>
+            <td>${m.tags.map(t => `<span class="tag">${t}</span>`).join('')}</td>
+            <td>${m.use_count}x</td>
+            <td><button class="danger" onclick="deleteProjectMemory('${m.id}')">Delete</button></td>
+          </tr>`).join('')}
+        </tbody></table>`;
+      } catch (e) { console.error(e); }
     }
 
-    async function addMemory() {
+    async function addProjectMemory() {
       const project = document.getElementById('project-path').value;
-      if (!project) {
-        showStatus('memories-status', 'Enter a project path first', true);
-        return;
-      }
-
+      if (!project) { showStatus('proj-status', 'Enter project path first', true); return; }
       const memory = {
-        memory_type: document.getElementById('memory-type').value,
-        content: document.getElementById('memory-content').value,
-        tags: document.getElementById('memory-tags').value.split(',').map(s => s.trim()).filter(s => s)
+        memory_type: 'project',
+        content: document.getElementById('proj-content').value,
+        tags: document.getElementById('proj-tags').value.split(',').map(s => s.trim()).filter(s => s)
       };
-
-      if (!memory.content) {
-        showStatus('memories-status', 'Content is required', true);
-        return;
-      }
-
+      if (!memory.content) { showStatus('proj-status', 'Content required', true); return; }
       try {
         const res = await fetch(`/api/memories?project=${encodeURIComponent(project)}`, {
           method: 'POST',
@@ -428,39 +318,25 @@
         });
         const json = await res.json();
         if (json.success) {
-          document.getElementById('memory-content').value = '';
-          document.getElementById('memory-tags').value = '';
-          loadMemories();
-          showStatus('memories-status', 'Memory added', false);
-        } else {
-          showStatus('memories-status', json.error, true);
-        }
-      } catch (e) {
-        showStatus('memories-status', e.message, true);
-      }
+          document.getElementById('proj-content').value = '';
+          document.getElementById('proj-tags').value = '';
+          loadProjectMemories();
+          showStatus('proj-status', 'Memory added', false);
+        } else { showStatus('proj-status', json.error, true); }
+      } catch (e) { showStatus('proj-status', e.message, true); }
     }
 
-    async function deleteMemory(id) {
+    async function deleteProjectMemory(id) {
       const project = document.getElementById('project-path').value;
       if (!confirm('Delete this memory?')) return;
-
       try {
-        const res = await fetch(`/api/memories/${id}?project=${encodeURIComponent(project)}`, {
-          method: 'DELETE'
-        });
+        const res = await fetch(`/api/memories/${id}?project=${encodeURIComponent(project)}`, { method: 'DELETE' });
         const json = await res.json();
-        if (json.success) {
-          loadMemories();
-          showStatus('memories-status', 'Memory deleted', false);
-        } else {
-          showStatus('memories-status', json.error, true);
-        }
-      } catch (e) {
-        showStatus('memories-status', e.message, true);
-      }
+        if (json.success) { loadProjectMemories(); showStatus('proj-status', 'Deleted', false); }
+        else { showStatus('proj-status', json.error, true); }
+      } catch (e) { showStatus('proj-status', e.message, true); }
     }
 
-    // Init
     loadConfig();
   </script>
 </body>

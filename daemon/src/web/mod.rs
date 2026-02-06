@@ -30,6 +30,14 @@ pub async fn serve(open_browser: bool) -> Result<(), Error> {
                 .delete(api::delete_mcp),
         )
         .route(
+            "/api/preferences",
+            get(api::list_preferences).post(api::create_preference),
+        )
+        .route(
+            "/api/preferences/:id",
+            axum::routing::delete(api::delete_preference),
+        )
+        .route(
             "/api/memories",
             get(api::list_memories).post(api::create_memory),
         )

@@ -21,78 +21,52 @@ Squirrel stores to local SQLite
 Next session: AI calls squirrel_get_memory → corrections loaded
 ```
 
-Squirrel has **no AI**. Your CLI tool (Claude Code, Cursor, etc.) has full conversation context and decides what to store. Squirrel is just storage + git hooks.
+Squirrel has **no AI**. Your CLI tool (Claude Code, Cursor, etc.) decides what to store. Squirrel is just storage + git hooks.
 
 ## Memory Types
 
-Memories are behavioral corrections — things that change how the AI acts next time.
+| Type | Storage | When to store | Example |
+|------|---------|---------------|---------|
+| `preference` | Global (~/.sqrl/) | User corrects AI behavior | "Don't use emojis in commits" |
+| `project` | Project (.sqrl/) | Project-specific rule | "Use httpx not requests here" |
 
-| Type | When to store | Example |
-|------|---------------|---------|
-| `preference` | User corrects the AI's style | "Don't use emojis in code or commits" |
-| `project` | AI learns a project rule | "Use httpx not requests in this project" |
-| `decision` | A choice is made that constrains future behavior | "We chose SQLite, don't suggest Postgres" |
-| `solution` | AI hits an error and finds the fix | "SSL error with requests? Switch to httpx" |
-
-**Don't store:** research in progress, general knowledge, conversation context, anything that doesn't change AI behavior.
-
-## Doc Review
-
-Pre-push hook shows what changed so AI can review docs.
-
-```
-You push → pre-push hook shows diff summary + doc file list
-    → AI reads output, decides if docs need updating
-    → AI updates docs if needed, then push succeeds
-```
-
-No static mappings. No complex rules. The AI understands the code and makes the call.
+**Don't store:** research in progress, general knowledge, conversation context.
 
 ## Quick Start
 
 ```bash
+# Configure Squirrel globally
+sqrl config
+
 # Initialize in any project
 cd ~/my-project
 sqrl init
 ```
 
-`sqrl init` automatically:
-- Creates `.sqrl/` with config and database
-- Installs git hooks for doc debt tracking
-- Registers MCP server with your AI tool
-- Adds memory triggers to CLAUDE.md
-
 ## CLI
 
 | Command | Description |
 |---------|-------------|
+| `sqrl config` | Open web UI for global configuration |
 | `sqrl init` | Initialize project |
-| `sqrl status` | Show memories and doc debt |
-| `sqrl goaway` | Remove all Squirrel data |
-| `sqrl mcp-serve` | Start MCP server (called by AI tool) |
-
-## Supported Tools
-
-Claude Code (others coming)
+| `sqrl apply` | Apply global MCP configs to project |
+| `sqrl status` | Show status |
+| `sqrl goaway` | Remove Squirrel from project |
 
 ## Architecture
 
 ```
-CLI AI (Claude Code, Cursor, etc.)
-    │ MCP
-    ▼
-sqrl binary (Rust)
-    │
-    ▼
-SQLite (.sqrl/memory.db)
+~/.sqrl/                     # Global
+├── config.yaml              # Tools, enabled MCPs
+├── memory.db                # User preferences
+└── mcp-config.json          # Uploaded MCP definitions
+
+<project>/.sqrl/             # Project
+├── config.yaml              # Project settings
+└── memory.db                # Project memories
 ```
 
-Single Rust binary. No daemon, no Python, no LLM calls, no network.
-
-| Component | Responsibility |
-|-----------|----------------|
-| sqrl binary | MCP server, CLI, git hooks, SQLite storage |
-| CLI AI | Decides what to remember, fixes doc debt |
+Single Rust binary. No daemon, no Python, no LLM calls.
 
 ## Development
 
@@ -101,8 +75,8 @@ git clone https://github.com/anthropics/squirrel.git
 cd squirrel
 devenv shell
 
-cargo test    # Run tests
-cargo build   # Build binary
+cargo test
+cargo build
 ```
 
 ## License

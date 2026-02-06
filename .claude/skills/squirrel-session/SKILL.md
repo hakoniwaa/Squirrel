@@ -8,4 +8,3 @@ At the start of this session, load corrections from Squirrel:
 
 1. Call `squirrel_get_memory` to get all behavioral corrections.
 2. Apply these corrections throughout the session.
-3. If doc debt exists (check via `sqrl status` output in project), note which docs may need updates.

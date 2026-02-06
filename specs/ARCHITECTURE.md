@@ -103,10 +103,11 @@ CLI tools (Claude Code, Cursor, etc.) are the intelligence layer.
 
 | File | Location | Contains |
 |------|----------|----------|
-| Global Config | `~/.sqrl/config.yaml` | Enabled tools, MCP configs |
-| Global MCPs | `~/.sqrl/mcps/` | MCP config files to apply to projects |
-| Project Memory DB | `<repo>/.sqrl/memory.db` | All memories |
-| Project Config | `<repo>/.sqrl/config.yaml` | Project-specific overrides |
+| Global Config | `~/.sqrl/config.yaml` | Enabled tools, enabled MCPs |
+| Global Preferences | `~/.sqrl/memory.db` | User preferences (apply everywhere) |
+| MCP Config File | `~/.sqrl/mcp-config.json` | Uploaded MCP definitions |
+| Project Memory DB | `<repo>/.sqrl/memory.db` | Project-specific memories |
+| Project Config | `<repo>/.sqrl/config.yaml` | Project settings |
 | Skill File | `<repo>/.claude/skills/squirrel-session/SKILL.md` | Session start instructions |
 
 ---
@@ -159,12 +160,10 @@ CLI needs project context (user asks, or session start skill)
 
 ### Memory Types
 
-| Type | Description | Examples |
-|------|-------------|---------|
-| `preference` | User's coding style preferences | "No emojis", "Use Gemini 3 Pro" |
-| `project` | Project-specific knowledge | "Use httpx not requests" |
-| `decision` | Architecture decisions | "Chose PostgreSQL for transactions" |
-| `solution` | Problem-solution pairs | "Fixed SSL by switching to httpx" |
+| Type | Storage | Description | Examples |
+|------|---------|-------------|---------|
+| `preference` | `~/.sqrl/memory.db` | Global user preferences | "No emojis", "Prefer async/await" |
+| `project` | `.sqrl/memory.db` | Project-specific rules | "Use httpx not requests" |
 
 ---
 

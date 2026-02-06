@@ -16,6 +16,10 @@ pub struct GlobalConfig {
     #[serde(default)]
     pub tools: GlobalToolsConfig,
 
+    /// Enabled MCP names (from uploaded config).
+    #[serde(default)]
+    pub mcps: Vec<String>,
+
     /// Web UI settings.
     #[serde(default)]
     pub ui: UiConfig,
@@ -92,6 +96,7 @@ impl Default for GlobalConfig {
     fn default() -> Self {
         Self {
             tools: GlobalToolsConfig::default(),
+            mcps: vec![],
             ui: UiConfig::default(),
         }
     }
@@ -113,6 +118,11 @@ impl GlobalConfig {
     /// Get the MCPs directory path.
     pub fn mcps_dir() -> Result<PathBuf, Error> {
         Ok(Self::dir()?.join("mcps"))
+    }
+
+    /// Get the global memory database path.
+    pub fn memory_db_path() -> Result<PathBuf, Error> {
+        Ok(Self::dir()?.join("memory.db"))
     }
 
     /// Initialize global config directory if not exists.

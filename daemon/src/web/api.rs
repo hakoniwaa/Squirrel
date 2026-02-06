@@ -112,7 +112,90 @@ pub async fn delete_mcp(Path(name): Path<String>) -> impl IntoResponse {
     }
 }
 
-// === Memory endpoints ===
+// === Preferences endpoints (global, ~/.sqrl/memory.db) ===
+
+#[derive(Deserialize)]
+pub struct CreatePreferenceRequest {
+    content: String,
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+pub async fn list_preferences() -> impl IntoResponse {
+    let db_path = match GlobalConfig::memory_db_path() {
+        Ok(p) => p,
+        Err(e) => return ApiResponse::error(e.to_string()).into_response(),
+    };
+
+    // Ensure parent dir exists
+    if let Some(parent) = db_path.parent() {
+        if !parent.exists() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                return ApiResponse::error(e.to_string()).into_response();
+            }
+        }
+    }
+
+    match Storage::open(&db_path) {
+        Ok(storage) => match storage.list_all_memories() {
+            Ok(memories) => {
+                // Filter to only preference type
+                let prefs: Vec<_> = memories
+                    .into_iter()
+                    .filter(|m| m.memory_type == "preference")
+                    .collect();
+                ApiResponse::ok(prefs).into_response()
+            }
+            Err(e) => ApiResponse::error(e.to_string()).into_response(),
+        },
+        Err(e) => ApiResponse::error(e.to_string()).into_response(),
+    }
+}
+
+pub async fn create_preference(Json(req): Json<CreatePreferenceRequest>) -> impl IntoResponse {
+    let db_path = match GlobalConfig::memory_db_path() {
+        Ok(p) => p,
+        Err(e) => return ApiResponse::error(e.to_string()).into_response(),
+    };
+
+    // Ensure parent dir exists
+    if let Some(parent) = db_path.parent() {
+        if !parent.exists() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                return ApiResponse::error(e.to_string()).into_response();
+            }
+        }
+    }
+
+    match Storage::open(&db_path) {
+        Ok(storage) => match storage.store_memory("preference", &req.content, &req.tags) {
+            Ok(result) => ApiResponse::ok(result).into_response(),
+            Err(e) => ApiResponse::error(e.to_string()).into_response(),
+        },
+        Err(e) => ApiResponse::error(e.to_string()).into_response(),
+    }
+}
+
+pub async fn delete_preference(Path(id): Path<String>) -> impl IntoResponse {
+    let db_path = match GlobalConfig::memory_db_path() {
+        Ok(p) => p,
+        Err(e) => return ApiResponse::error(e.to_string()).into_response(),
+    };
+
+    if !db_path.exists() {
+        return ApiResponse::not_found("No preferences database").into_response();
+    }
+
+    match Storage::open(&db_path) {
+        Ok(storage) => match storage.delete_memory(&id) {
+            Ok(()) => ApiResponse::ok(()).into_response(),
+            Err(e) => ApiResponse::error(e.to_string()).into_response(),
+        },
+        Err(e) => ApiResponse::error(e.to_string()).into_response(),
+    }
+}
+
+// === Memory endpoints (project-specific, .sqrl/memory.db) ===
 
 #[derive(Deserialize)]
 pub struct ProjectQuery {

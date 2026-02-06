@@ -69,7 +69,7 @@ fn get_tools() -> Value {
         "tools": [
             {
                 "name": "squirrel_store_memory",
-                "description": "Store a behavioral correction. Use when the user corrects you, you learn a project rule, a decision constrains future work, or you find a fix for an error.",
+                "description": "Store a behavioral correction. Use when the user corrects you or you learn a project rule.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -79,8 +79,8 @@ fn get_tools() -> Value {
                         },
                         "memory_type": {
                             "type": "string",
-                            "enum": ["preference", "project", "decision", "solution"],
-                            "description": "Type: preference (user correction), project (project rule), decision (constrains future work), solution (error fix)"
+                            "enum": ["preference", "project"],
+                            "description": "Type: preference (global user preference), project (project-specific rule)"
                         },
                         "tags": {
                             "type": "array",
@@ -93,13 +93,13 @@ fn get_tools() -> Value {
             },
             {
                 "name": "squirrel_get_memory",
-                "description": "Get behavioral corrections from Squirrel. Call at session start or before making choices the user may have corrected before.",
+                "description": "Get behavioral corrections from Squirrel. Call at session start or before making choices.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "memory_type": {
                             "type": "string",
-                            "enum": ["preference", "project", "decision", "solution"],
+                            "enum": ["preference", "project"],
                             "description": "Filter by type. Omit to get all."
                         },
                         "tags": {
