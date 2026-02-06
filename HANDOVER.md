@@ -100,7 +100,22 @@ File: `daemon/src/web/static/index.html`
 
 ---
 
-## 7. Pre-Release
+## 7. README Improvement
+
+**Goal**: Clear README with what sqrl does and quickstart guide.
+
+**Include**:
+- What is Squirrel (one paragraph)
+- Key features (bullet points)
+- Quickstart (install → configure → use)
+- How MCP works with CLI tools
+- How repo sync works
+
+File: `README.md`
+
+---
+
+## 8. Pre-Release
 
 - [ ] Build binaries (Linux/macOS/Windows) with cargo-dist
 - [ ] Installation docs for each platform
